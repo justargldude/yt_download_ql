@@ -1,9 +1,10 @@
-// agent.js — Main agent loop: poll Firebase, xử lý request, thông báo Telegram
+// agent.js — v3.0: Main agent loop + heartbeat + source registry + cancel
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 import { readFile } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
 import { loadConfig } from './config-loader.js';
 import { processRequest } from './processor.js';
@@ -18,17 +19,33 @@ export function ts() {
   return `[${now.toTimeString().slice(0, 8)}]`;
 }
 
+// ── URL HASH (strip tracking params) ────────────────────────────────────
+function hashUrl(url) {
+  try {
+    const u = new URL(url);
+    u.searchParams.delete('si');
+    u.searchParams.delete('t');
+    u.searchParams.delete('feature');
+    const clean = u.origin + u.pathname + '?v=' + (u.searchParams.get('v') || '');
+    return crypto.createHash('md5').update(clean).digest('hex').slice(0, 12);
+  } catch {
+    return crypto.createHash('md5').update(url).digest('hex').slice(0, 12);
+  }
+}
+
 // ── GLOBAL STATE ────────────────────────────────────────────────────────
 let db = null;
 let config = null;
 let isShuttingDown = false;
 let processingCount = 0;
 let pollTimer = null;
+let heartbeatTimer = null;
+let currentRequestId = null;
 
 // ── MAIN ────────────────────────────────────────────────────────────────
 async function main() {
   console.log(`${ts()} ========================================`);
-  console.log(`${ts()} 🎬 YT-Queue Agent v2.0.0`);
+  console.log(`${ts()} 🎬 YT-Queue Agent v3.0.0`);
   console.log(`${ts()} ========================================`);
 
   // 1. Load config
@@ -51,24 +68,52 @@ async function main() {
   console.log(`${ts()} ✅ Firebase connected: ${config.firebase.databaseURL}`);
 
   // 3. Telegram: thông báo agent đã khởi động
-  await sendTelegramMessage(config, '🟢 Agent started! Listening for requests...');
+  await sendTelegramMessage(config, '🟢 Agent v3.0 started! Listening for requests...');
 
-  // 4. Start cleanup job
-  startCleanupJob(config);
+  // 4. Start heartbeat
+  startHeartbeat();
 
-  // 5. Lắng nghe real-time qua Firebase listener (bổ sung cho polling)
+  // 5. Start cleanup job
+  startCleanupJob(config, db);
+
+  // 6. Lắng nghe real-time qua Firebase listener
   setupRealtimeListener();
 
-  // 6. Main polling loop
+  // 7. Main polling loop
   console.log(`${ts()} 🔄 Starting poll loop...`);
   pollTimer = setInterval(() => pollForRequests(), config.settings.pollIntervalMs);
 
   // Chạy poll đầu tiên ngay lập tức
   pollForRequests();
 
-  // 7. Graceful shutdown
+  // 8. Graceful shutdown
   process.on('SIGINT', handleShutdown);
   process.on('SIGTERM', handleShutdown);
+}
+
+// ── HEARTBEAT ───────────────────────────────────────────────────────────
+function startHeartbeat() {
+  const writeHeartbeat = async () => {
+    try {
+      await db.ref('agent_status').set({
+        online: true,
+        last_heartbeat: new Date().toISOString(),
+        processing: currentRequestId || null,
+        version: '3.0.0',
+      });
+    } catch (e) {
+      console.warn(`${ts()} ⚠️ Heartbeat write failed: ${e.message}`);
+    }
+  };
+
+  // Ghi ngay lập tức
+  writeHeartbeat();
+
+  // Lặp mỗi 15 giây
+  heartbeatTimer = setInterval(writeHeartbeat, 15000);
+  heartbeatTimer.unref();
+
+  console.log(`${ts()} 💚 Heartbeat started (every 15s)`);
 }
 
 // ── FIREBASE REAL-TIME LISTENER ─────────────────────────────────────────
@@ -78,8 +123,6 @@ function setupRealtimeListener() {
   ref.orderByChild('status').equalTo('pending').on('child_added', (snapshot) => {
     const key = snapshot.key;
     console.log(`${ts()} 🔔 Real-time: new pending request detected → ${key}`);
-    // Không xử lý trực tiếp ở đây, để poll loop xử lý để tránh race condition
-    // Nhưng trigger poll ngay nếu đang idle
     if (processingCount === 0) {
       pollForRequests();
     }
@@ -126,6 +169,15 @@ async function handleSingleRequest(requestId, request) {
   console.log(`${ts()} ─────────────────────────────────────────`);
 
   processingCount++;
+  currentRequestId = requestId;
+
+  // Cancel check function
+  const checkCancelled = async () => {
+    try {
+      const snap = await db.ref(`requests/${requestId}/status`).once('value');
+      return snap.val() === 'cancelling';
+    } catch { return false; }
+  };
 
   try {
     // a. Đánh dấu đang xử lý
@@ -138,7 +190,7 @@ async function handleSingleRequest(requestId, request) {
     await sendTelegramMessage(config, `⚙️ Processing request from <b>${name}</b>...\n🔗 ${url}`);
 
     // c. Xử lý chính
-    const result = await processRequest(request, requestId, config);
+    const result = await processRequest(request, requestId, config, db, checkCancelled);
 
     // d. Cập nhật Firebase: done
     await reqRef.update({
@@ -151,7 +203,25 @@ async function handleSingleRequest(requestId, request) {
 
     console.log(`${ts()} ✅ Request ${requestId} completed successfully`);
 
-    // e. Telegram kết quả
+    // e. Source registry — lưu source file đã tải
+    if (result.sourceInfo) {
+      try {
+        const urlHash = hashUrl(result.sourceInfo.url);
+        await db.ref(`sources/${urlHash}`).set({
+          url: result.sourceInfo.url,
+          title: result.sourceInfo.title,
+          file_path: result.sourceInfo.filePath,
+          file_size_mb: result.sourceInfo.fileSizeMB,
+          downloaded_at: new Date().toISOString(),
+          request_id: requestId,
+        });
+        console.log(`${ts()} 📦 Source registered: ${urlHash}`);
+      } catch (e) {
+        console.warn(`${ts()} ⚠️ Source registry failed: ${e.message}`);
+      }
+    }
+
+    // f. Telegram kết quả
     await sendTelegramMessage(
       config,
       `✅ Done! <b>${name}</b>\n` +
@@ -159,28 +229,36 @@ async function handleSingleRequest(requestId, request) {
       `🔗 ${url}`
     );
   } catch (err) {
-    console.error(`${ts()} ❌ Request ${requestId} failed: ${err.message}`);
+    // Xử lý cancel
+    if (err.message === 'CANCELLED') {
+      console.log(`${ts()} 🚫 Request ${requestId} cancelled by user`);
+      try {
+        await reqRef.update({ status: 'cancelled', cancelled_at: new Date().toISOString() });
+      } catch (e) { /* ignore */ }
+      await sendTelegramMessage(config, `🚫 Request cancelled: <b>${name}</b>\n🔗 ${url}`);
+    } else {
+      console.error(`${ts()} ❌ Request ${requestId} failed: ${err.message}`);
 
-    // Cập nhật Firebase: error
-    try {
-      await reqRef.update({
-        status: 'error',
-        error_message: err.message,
-        failed_at: new Date().toISOString(),
-      });
-    } catch (dbErr) {
-      console.error(`${ts()} ❌ Failed to update error status: ${dbErr.message}`);
+      try {
+        await reqRef.update({
+          status: 'error',
+          error_message: err.message,
+          failed_at: new Date().toISOString(),
+        });
+      } catch (dbErr) {
+        console.error(`${ts()} ❌ Failed to update error status: ${dbErr.message}`);
+      }
+
+      await sendTelegramMessage(
+        config,
+        `❌ Failed: <b>${name}</b>\n` +
+        `Error: ${err.message.slice(0, 200)}\n` +
+        `🔗 ${url}`
+      );
     }
-
-    // Telegram lỗi
-    await sendTelegramMessage(
-      config,
-      `❌ Failed: <b>${name}</b>\n` +
-      `Error: ${err.message.slice(0, 200)}\n` +
-      `🔗 ${url}`
-    );
   } finally {
     processingCount--;
+    currentRequestId = null;
   }
 }
 
@@ -191,13 +269,9 @@ async function handleShutdown() {
 
   console.log(`\n${ts()} 🛑 Shutting down gracefully...`);
 
-  // Dừng poll
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
 
-  // Đợi request đang xử lý (tối đa 30s)
   if (processingCount > 0) {
     console.log(`${ts()} ⏳ Waiting for ${processingCount} request(s) to finish...`);
     const deadline = Date.now() + 30000;
@@ -206,7 +280,16 @@ async function handleShutdown() {
     }
   }
 
-  // Telegram thông báo tắt
+  // Set agent offline
+  try {
+    await db.ref('agent_status').set({
+      online: false,
+      last_heartbeat: new Date().toISOString(),
+      processing: null,
+      version: '3.0.0',
+    });
+  } catch (e) { /* ignore */ }
+
   await sendTelegramMessage(config, '🔴 Agent stopped.');
 
   console.log(`${ts()} 👋 Agent stopped. Goodbye!`);

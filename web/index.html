@@ -48,6 +48,10 @@
         <h1>YT Highlight <span class="gradient-text">Queue</span></h1>
       </div>
       <p class="tagline">Submit a YouTube video with timestamps — get trimmed highlights in your inbox.</p>
+      <div class="agent-status" id="agent-status">
+        <span class="agent-dot" id="agent-dot"></span>
+        <span id="agent-status-text">Checking agent...</span>
+      </div>
     </header>
 
     <!-- ─── Form Card ─── -->
@@ -65,6 +69,14 @@
             <input type="url" id="yt-url" placeholder="https://www.youtube.com/watch?v=..." required />
           </div>
           <span class="field-error" id="url-error"></span>
+        </div>
+
+        <!-- Source Selector (hidden by default) -->
+        <div class="field source-selector" id="source-selector-field" style="display:none;">
+          <label>Hoặc chọn video đã tải <small>(skip download)</small></label>
+          <select id="source-select">
+            <option value="">-- Tải video mới --</option>
+          </select>
         </div>
 
         <!-- Time Segments -->
