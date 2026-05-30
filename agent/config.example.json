@@ -1,0 +1,33 @@
+{
+  "firebase": {
+    "databaseURL": "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
+    "serviceAccountPath": "./firebase-service-account.json"
+  },
+  "email": {
+    "service": "gmail",
+    "user": "your-email@gmail.com",
+    "appPassword": "xxxx xxxx xxxx xxxx",
+    "fromName": "YT Highlight Bot"
+  },
+  "telegram": {
+    "botToken": "YOUR_BOT_TOKEN",
+    "chatId": "YOUR_CHAT_ID"
+  },
+  "google_drive": {
+    "serviceAccountPath": "./gdrive-service-account.json",
+    "folderId": "YOUR_SHARED_FOLDER_ID"
+  },
+  "paths": {
+    "ytdlp": "C:\\Users\\lnv\\Downloads\\yt-dlp.exe",
+    "ffmpeg": "C:\\Users\\lnv\\Downloads\\ffmpeg.exe",
+    "outputDir": "C:\\Users\\lnv\\Downloads\\YT_Queue_Output",
+    "cookiesFile": "C:\\Users\\lnv\\Downloads\\cookies.txt"
+  },
+  "settings": {
+    "pollIntervalMs": 30000,
+    "autoDeleteAfterHours": 24,
+    "cleanupIntervalMs": 3600000,
+    "maxFileSizeForEmailMB": 20,
+    "concurrentFragments": 16
+  }
+}

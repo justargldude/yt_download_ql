@@ -1,0 +1,17 @@
+# Private configurations and keys
+agent/config.json
+agent/firebase-service-account.json
+agent/gdrive-service-account.json
+agent/start.bat
+
+# Node dependencies
+agent/node_modules/
+package-lock.json
+
+# Local output files and temporary downloads
+agent/YT_Queue_Output/
+*.mp4
+*.temp
+*.log
+.DS_Store
+Thumbs.db
