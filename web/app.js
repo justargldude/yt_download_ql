@@ -285,7 +285,7 @@ function initAgentStatus() {
 // ═══════════════════════════════════════════
 
 const activeListeners = new Set();
-const STEP_NAMES = ['Tải & cắt', 'Upload', 'Email'];
+const STEP_NAMES = ['Tải video', 'Upload', 'Email'];
 
 function listenToRequest(requestId) {
   if (activeListeners.has(requestId)) return;
