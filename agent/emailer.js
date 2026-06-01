@@ -56,14 +56,15 @@ export async function sendResultEmail(config, request, highlightFiles, driveLink
       let currentSize = 0;
 
       for (const file of fileSizes) {
-        // Nếu 1 file đã > limit → gửi riêng
+        // Nếu 1 file > limit → KHÔNG chia nhỏ, ghi nhận là oversized
         if (file.sizeMB > maxEmailMB) {
           if (currentBatch.length > 0) {
             batches.push(currentBatch);
             currentBatch = [];
             currentSize = 0;
           }
-          batches.push([file]);
+          oversizedFiles.push(file);
+          console.log(`${ts()} ⚠️ File ${path.basename(file.path)} (${file.sizeMB.toFixed(1)} MB) quá lớn cho email — sẽ ghi chú trong email`);
           continue;
         }
 

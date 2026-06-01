@@ -44,10 +44,18 @@
           <h2>📋 Yêu cầu mới</h2>
         </div>
 
+        <!-- Source selector (video đã tải, cắt lại không cần tải) -->
+        <div class="field" id="field-source" style="display:none">
+          <label for="source-select">♻️ Video đã tải <small>(cắt lại không cần tải)</small></label>
+          <select id="source-select">
+            <option value="">-- Tải video mới --</option>
+          </select>
+        </div>
+
         <!-- YouTube URL -->
         <div class="field" id="field-url">
           <label for="yt-url">🔗 Link YouTube</label>
-          <input type="url" id="yt-url" placeholder="https://www.youtube.com/watch?v=... hoặc /live/..." required />
+          <input type="url" id="yt-url" placeholder="https://www.youtube.com/watch?v=... hoặc /live/..." />
           <span class="field-error" id="url-error"></span>
         </div>
 

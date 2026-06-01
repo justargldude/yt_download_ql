@@ -34,6 +34,8 @@ const statusList = document.getElementById('status-list');
 const emptyState = document.getElementById('empty-state');
 const clearBtn = document.getElementById('clear-history-btn');
 const toastContainer = document.getElementById('toast-container');
+const sourceSelect = document.getElementById('source-select');
+const sourceField = document.getElementById('field-source');
 
 // ── Local Storage ──────────────────────────
 const STORAGE_KEY = 'yt_cut_requests';
@@ -125,7 +127,7 @@ function dismissToast(toast) {
 function setLoading(loading) {
   submitBtn.disabled = loading;
   submitBtn.classList.toggle('loading', loading);
-  [urlInput, segmentsInput, emailInput, nameInput].forEach(el => { if (el) el.disabled = loading; });
+  [urlInput, segmentsInput, emailInput, nameInput, sourceSelect].forEach(el => { if (el) el.disabled = loading; });
 }
 
 form.addEventListener('submit', async (e) => {
@@ -136,11 +138,12 @@ form.addEventListener('submit', async (e) => {
   const email = emailInput.value.trim();
   const name = nameInput.value.trim();
   const rawSegments = segmentsInput.value;
+  const selectedSource = sourceSelect?.value || '';
 
   let valid = true;
 
-  if (!url) { setError('url-error', 'Vui lòng nhập link YouTube.'); valid = false; }
-  else if (!isValidYouTubeUrl(url)) { setError('url-error', 'Link phải là youtube.com hoặc youtu.be.'); valid = false; }
+  if (!url && !selectedSource) { setError('url-error', 'Nhập link YouTube hoặc chọn video đã tải.'); valid = false; }
+  else if (url && !isValidYouTubeUrl(url)) { setError('url-error', 'Link phải là youtube.com hoặc youtu.be.'); valid = false; }
 
   if (!email) { setError('email-error', 'Vui lòng nhập email.'); valid = false; }
   else if (!isValidEmail(email)) { setError('email-error', 'Email không hợp lệ.'); valid = false; }
@@ -159,14 +162,18 @@ form.addEventListener('submit', async (e) => {
 
   if (!valid) return;
 
+  // Lấy URL từ source nếu chọn video đã tải
+  const finalUrl = url || (sourceSelect?.selectedOptions[0]?.dataset?.url || '');
+
   setLoading(true);
   const requestId = 'req_' + Date.now();
   const payload = {
-    url,
+    url: finalUrl,
     segments,
     email,
     name: name || 'Anonymous',
     status: 'pending',
+    source_id: selectedSource || null,
     created_at: new Date().toISOString(),
     processed_at: null,
     result_links: [],
@@ -177,8 +184,9 @@ form.addEventListener('submit', async (e) => {
     await db.ref(`requests/${requestId}`).set(payload);
     saveRequestId(requestId);
     sendTelegramNotification(payload, requestId).catch(() => {});
-    showToast('Đã gửi yêu cầu thành công!', 'success');
+    showToast(selectedSource ? 'Đã gửi! Cắt lại từ source cache ⚡' : 'Đã gửi yêu cầu thành công!', 'success');
     form.reset();
+    if (sourceSelect) sourceSelect.value = '';
     renderStatusList();
     listenToRequest(requestId);
   } catch (err) {
@@ -253,6 +261,45 @@ window.cancelRequest = cancelRequest;
 // ═══════════════════════════════════════════
 //  AGENT STATUS
 // ═══════════════════════════════════════════
+
+// ═══════════════════════════════════════════
+//  SOURCE SELECTOR
+// ═══════════════════════════════════════════
+
+function initSourceSelector() {
+  if (!sourceSelect || !sourceField) return;
+
+  db.ref('sources').on('value', (snapshot) => {
+    const sources = snapshot.val();
+    sourceSelect.innerHTML = '<option value="">-- Tải video mới --</option>';
+    if (!sources) { sourceField.style.display = 'none'; return; }
+
+    const entries = Object.entries(sources);
+    if (entries.length === 0) { sourceField.style.display = 'none'; return; }
+
+    sourceField.style.display = '';
+    entries.forEach(([hash, src]) => {
+      const opt = document.createElement('option');
+      opt.value = hash;
+      const sizeMB = src.file_size_mb ? `${src.file_size_mb} MB` : '';
+      const url = src.url || src.title || hash;
+      const truncUrl = url.length > 55 ? url.substring(0, 55) + '…' : url;
+      // Tính thời gian còn lại trước khi xoá
+      const dlTime = src.downloaded_at ? new Date(src.downloaded_at).getTime() : 0;
+      const hoursLeft = dlTime ? Math.max(0, 12 - (Date.now() - dlTime) / 3600000).toFixed(0) : '?';
+      opt.textContent = `♻️ ${truncUrl} (${sizeMB}, còn ${hoursLeft}h)`;
+      opt.dataset.url = src.url || '';
+      sourceSelect.appendChild(opt);
+    });
+  });
+
+  sourceSelect.addEventListener('change', () => {
+    const selected = sourceSelect.selectedOptions[0];
+    if (selected && selected.dataset.url) {
+      urlInput.value = selected.dataset.url;
+    }
+  });
+}
 
 function initAgentStatus() {
   const dotEl = document.getElementById('agent-dot');
@@ -489,6 +536,7 @@ function formatElapsed(startIso) {
 document.addEventListener('DOMContentLoaded', () => {
   renderStatusList();
   initAgentStatus();
+  initSourceSelector();
 
   // Update elapsed times every second
   setInterval(() => {

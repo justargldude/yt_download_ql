@@ -201,6 +201,22 @@ async function handleSingleRequest(requestId, request) {
       processed_at: new Date().toISOString(),
     });
 
+    // e. Register source cache in Firebase (để web hiện danh sách video đã tải)
+    if (result.sourceInfo) {
+      const si = result.sourceInfo;
+      try {
+        await db.ref(`sources/${si.hash}`).set({
+          url: si.url,
+          file_path: si.filePath,
+          file_size_mb: si.fileSizeMB,
+          title: request.url, // will be URL, good enough
+          downloaded_at: new Date().toISOString(),
+          request_id: requestId,
+        });
+        console.log(`${ts()} 💾 Source cached: ${si.hash} (${si.fileSizeMB} MB, giữ 12h)`);
+      } catch (e) { /* ignore */ }
+    }
+
     console.log(`${ts()} ✅ Request ${requestId} completed successfully`);
 
     // f. Telegram kết quả

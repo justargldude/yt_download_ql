@@ -1,7 +1,8 @@
-// uploader.js — Upload file lên Google Drive bằng service account
+// uploader.js — Upload file lên Google Drive bằng OAuth2 (dùng quota của bạn)
+// Hỗ trợ cả OAuth2 (cá nhân) và Service Account (fallback)
 import { google } from 'googleapis';
-import { readFile } from 'fs/promises';
-import { createReadStream } from 'fs';
+import { readFile, writeFile } from 'fs/promises';
+import { createReadStream, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ts } from './agent.js';
@@ -9,43 +10,52 @@ import { ts } from './agent.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Tạo Drive client từ service account.
+ * Tạo Drive client — ưu tiên OAuth2, fallback Service Account.
  */
 async function getDriveClient(config) {
-  const saPath = path.resolve(__dirname, config.google_drive.serviceAccountPath);
-  const saRaw = await readFile(saPath, 'utf-8');
-  const sa = JSON.parse(saRaw);
+  const driveConfig = config.google_drive;
 
-  const auth = new google.auth.GoogleAuth({
-    credentials: sa,
-    scopes: ['https://www.googleapis.com/auth/drive'],
-  });
+  // ── OAuth2 (dùng quota Google One của user) ──
+  if (driveConfig.clientId && driveConfig.clientSecret && driveConfig.refreshToken) {
+    const oauth2 = new google.auth.OAuth2(
+      driveConfig.clientId,
+      driveConfig.clientSecret,
+    );
+    oauth2.setCredentials({ refresh_token: driveConfig.refreshToken });
+    return google.drive({ version: 'v3', auth: oauth2 });
+  }
 
-  return google.drive({ version: 'v3', auth });
+  // ── Service Account (fallback) ──
+  if (driveConfig.serviceAccountPath) {
+    const saPath = path.resolve(__dirname, driveConfig.serviceAccountPath);
+    const sa = JSON.parse(await readFile(saPath, 'utf-8'));
+    const auth = new google.auth.GoogleAuth({
+      credentials: sa,
+      scopes: ['https://www.googleapis.com/auth/drive'],
+    });
+    return google.drive({ version: 'v3', auth });
+  }
+
+  throw new Error('Google Drive not configured: need OAuth2 (clientId/clientSecret/refreshToken) or serviceAccountPath');
 }
 
 /**
- * Upload một file lên Google Drive shared folder.
- * @param {object} config - App config
- * @param {string} filePath - Đường dẫn file cần upload
- * @param {string} fileName - Tên file trên Drive
- * @returns {{ fileId: string, webViewLink: string }} Link xem file
+ * Upload một file lên Google Drive.
  */
 export async function uploadToGoogleDrive(config, filePath, fileName) {
-  if (!config.google_drive?.serviceAccountPath || !config.google_drive?.folderId) {
-    throw new Error('Google Drive not configured (missing serviceAccountPath or folderId)');
+  const driveConfig = config.google_drive;
+  if (!driveConfig?.folderId) {
+    throw new Error('Google Drive not configured (missing folderId)');
   }
 
   const drive = await getDriveClient(config);
-  const folderId = config.google_drive.folderId;
 
-  console.log(`${ts()} ☁️  Uploading to Google Drive: ${fileName}...`);
+  console.log(`${ts()} ☁️  Uploading: ${fileName}...`);
 
-  // Tạo file trên Drive
   const res = await drive.files.create({
     requestBody: {
       name: fileName,
-      parents: [folderId],
+      parents: [driveConfig.folderId],
     },
     media: {
       mimeType: 'video/mp4',
@@ -59,35 +69,25 @@ export async function uploadToGoogleDrive(config, filePath, fileName) {
   // Set quyền: ai có link đều xem được
   await drive.permissions.create({
     fileId,
-    requestBody: {
-      role: 'reader',
-      type: 'anyone',
-    },
+    requestBody: { role: 'reader', type: 'anyone' },
   });
 
-  // Lấy lại webViewLink sau khi set permission
-  const fileInfo = await drive.files.get({
-    fileId,
-    fields: 'webViewLink',
-  });
-
+  const fileInfo = await drive.files.get({ fileId, fields: 'webViewLink' });
   const webViewLink = fileInfo.data.webViewLink;
-  console.log(`${ts()} ✅ Uploaded: ${fileName} → ${webViewLink}`);
 
+  console.log(`${ts()} ✅ Uploaded: ${fileName} → ${webViewLink}`);
   return { fileId, webViewLink };
 }
 
 /**
- * Xóa file trên Google Drive theo ID.
- * @param {object} config - App config
- * @param {string} fileId - Drive file ID
+ * Xóa file trên Drive.
  */
 export async function deleteFromDrive(config, fileId) {
   try {
     const drive = await getDriveClient(config);
     await drive.files.delete({ fileId });
-    console.log(`${ts()} 🗑️  Deleted from Drive: ${fileId}`);
+    console.log(`${ts()} 🗑️  Deleted: ${fileId}`);
   } catch (err) {
-    console.warn(`${ts()} ⚠️ Failed to delete Drive file ${fileId}: ${err.message}`);
+    console.warn(`${ts()} ⚠️ Delete failed: ${err.message}`);
   }
 }
