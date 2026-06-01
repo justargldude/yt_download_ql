@@ -1,7 +1,7 @@
 // agent.js — v3.0: Main agent loop + heartbeat + source registry + cancel
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
-import { readFile } from 'fs/promises';
+import { readFile, rm } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
@@ -203,24 +203,6 @@ async function handleSingleRequest(requestId, request) {
 
     console.log(`${ts()} ✅ Request ${requestId} completed successfully`);
 
-    // e. Source registry — lưu source file đã tải
-    if (result.sourceInfo) {
-      try {
-        const urlHash = hashUrl(result.sourceInfo.url);
-        await db.ref(`sources/${urlHash}`).set({
-          url: result.sourceInfo.url,
-          title: result.sourceInfo.title,
-          file_path: result.sourceInfo.filePath,
-          file_size_mb: result.sourceInfo.fileSizeMB,
-          downloaded_at: new Date().toISOString(),
-          request_id: requestId,
-        });
-        console.log(`${ts()} 📦 Source registered: ${urlHash}`);
-      } catch (e) {
-        console.warn(`${ts()} ⚠️ Source registry failed: ${e.message}`);
-      }
-    }
-
     // f. Telegram kết quả
     await sendTelegramMessage(
       config,
@@ -232,10 +214,18 @@ async function handleSingleRequest(requestId, request) {
     // Xử lý cancel
     if (err.message === 'CANCELLED') {
       console.log(`${ts()} 🚫 Request ${requestId} cancelled by user`);
+      // Clean up partial downloads
+      const outputDir = path.join(config.paths.outputDir, requestId);
+      try {
+        await rm(outputDir, { recursive: true, force: true });
+        console.log(`${ts()} 🗑️  Cleaned up partial files: ${outputDir}`);
+      } catch (cleanErr) {
+        console.warn(`${ts()} ⚠️ Cleanup failed: ${cleanErr.message}`);
+      }
       try {
         await reqRef.update({ status: 'cancelled', cancelled_at: new Date().toISOString() });
       } catch (e) { /* ignore */ }
-      await sendTelegramMessage(config, `🚫 Request cancelled: <b>${name}</b>\n🔗 ${url}`);
+      await sendTelegramMessage(config, `🚫 Request cancelled & files cleaned: <b>${name}</b>\n🔗 ${url}`);
     } else {
       console.error(`${ts()} ❌ Request ${requestId} failed: ${err.message}`);
 

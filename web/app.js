@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════
-   YT Highlight Queue v3.0 — Application Logic
+   YT CUT FOR HNYUQTL v4.0 — Application Logic
    ═══════════════════════════════════════════ */
 
 // ── Configuration ──────────────────────────
@@ -34,13 +34,9 @@ const statusList = document.getElementById('status-list');
 const emptyState = document.getElementById('empty-state');
 const clearBtn = document.getElementById('clear-history-btn');
 const toastContainer = document.getElementById('toast-container');
-const sourceSelect = document.getElementById('source-select');
-const sourceField = document.getElementById('source-selector-field');
 
-// ── Local Storage Key ──────────────────────
-const STORAGE_KEY = 'yt_queue_requests';
-
-// ── Request data cache ─────────────────────
+// ── Local Storage ──────────────────────────
+const STORAGE_KEY = 'yt_cut_requests';
 const requestDataMap = new Map();
 
 // ═══════════════════════════════════════════
@@ -77,13 +73,11 @@ function parseSegments(text) {
     const trimmed = line.trim();
     if (!trimmed) return;
     const parts = trimmed.split(SEP_REGEX);
-    if (parts.length < 2) { errors.push({ line: idx + 1, message: `Line ${idx + 1}: Cannot find start/end separator` }); return; }
-    const startRaw = parts[0];
-    const endRaw = parts[parts.length - 1];
-    const start = normalizeTime(startRaw);
-    const end = normalizeTime(endRaw);
-    if (!start) { errors.push({ line: idx + 1, message: `Line ${idx + 1}: Invalid start time "${startRaw}"` }); return; }
-    if (!end) { errors.push({ line: idx + 1, message: `Line ${idx + 1}: Invalid end time "${endRaw}"` }); return; }
+    if (parts.length < 2) { errors.push(`Dòng ${idx + 1}: Không tìm thấy dấu ngăn`); return; }
+    const start = normalizeTime(parts[0]);
+    const end = normalizeTime(parts[parts.length - 1]);
+    if (!start) { errors.push(`Dòng ${idx + 1}: Thời gian bắt đầu không hợp lệ`); return; }
+    if (!end) { errors.push(`Dòng ${idx + 1}: Thời gian kết thúc không hợp lệ`); return; }
     segments.push({ start, end });
   });
   return { segments, errors };
@@ -97,7 +91,7 @@ function isValidYouTubeUrl(url) { return /(?:youtube\.com|youtu\.be)/i.test(url)
 function isValidEmail(email) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email); }
 function clearErrors() {
   document.querySelectorAll('.field-error').forEach(el => (el.textContent = ''));
-  document.querySelectorAll('.field').forEach(el => { el.classList.remove('field-valid', 'field-invalid'); });
+  document.querySelectorAll('.field').forEach(el => el.classList.remove('field-valid', 'field-invalid'));
 }
 function setError(id, msg) { const el = document.getElementById(id); if (el) el.textContent = msg; }
 
@@ -105,16 +99,15 @@ function setError(id, msg) { const el = document.getElementById(id); if (el) el.
 //  TOAST NOTIFICATIONS
 // ═══════════════════════════════════════════
 
-const TOAST_ICONS = { success: '✓', error: '✕', info: 'ℹ' };
+const TOAST_ICONS = { success: '✅', error: '❌', info: 'ℹ️' };
 
 function showToast(message, type = 'info') {
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.innerHTML = `<span class="toast-icon">${TOAST_ICONS[type] || 'ℹ'}</span><span>${escapeHtml(message)}</span>`;
+  toast.innerHTML = `<span>${TOAST_ICONS[type] || 'ℹ️'}</span><span>${escapeHtml(message)}</span>`;
   toast.addEventListener('click', () => dismissToast(toast));
   toastContainer.appendChild(toast);
-  const timer = setTimeout(() => dismissToast(toast), 4000);
-  toast._timer = timer;
+  toast._timer = setTimeout(() => dismissToast(toast), 4000);
 }
 
 function dismissToast(toast) {
@@ -132,44 +125,48 @@ function dismissToast(toast) {
 function setLoading(loading) {
   submitBtn.disabled = loading;
   submitBtn.classList.toggle('loading', loading);
-  urlInput.disabled = loading;
-  segmentsInput.disabled = loading;
-  emailInput.disabled = loading;
-  nameInput.disabled = loading;
+  [urlInput, segmentsInput, emailInput, nameInput].forEach(el => { if (el) el.disabled = loading; });
 }
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   clearErrors();
+
   const url = urlInput.value.trim();
   const email = emailInput.value.trim();
   const name = nameInput.value.trim();
   const rawSegments = segmentsInput.value;
-  const selectedSource = sourceSelect?.value || '';
 
   let valid = true;
-  if (!url && !selectedSource) { setError('url-error', 'Please enter a YouTube URL or select an existing source.'); valid = false; }
-  else if (url && !isValidYouTubeUrl(url)) { setError('url-error', 'URL must be a valid youtube.com or youtu.be link.'); valid = false; }
 
-  if (!email) { setError('email-error', 'Please enter your email.'); valid = false; }
-  else if (!isValidEmail(email)) { setError('email-error', 'Please enter a valid email address.'); valid = false; }
+  if (!url) { setError('url-error', 'Vui lòng nhập link YouTube.'); valid = false; }
+  else if (!isValidYouTubeUrl(url)) { setError('url-error', 'Link phải là youtube.com hoặc youtu.be.'); valid = false; }
+
+  if (!email) { setError('email-error', 'Vui lòng nhập email.'); valid = false; }
+  else if (!isValidEmail(email)) { setError('email-error', 'Email không hợp lệ.'); valid = false; }
 
   const { segments, errors } = parseSegments(rawSegments);
-  if (errors.length > 0) { setError('segments-error', errors.map(e => e.message).join('; ')); flashSegments(false); valid = false; }
-  else if (segments.length === 0) { setError('segments-error', 'Please enter at least one time segment.'); valid = false; }
-  else { flashSegments(true); }
+  if (errors.length > 0) {
+    setError('segments-error', errors.join('; '));
+    flashField('field-segments', false);
+    valid = false;
+  } else if (segments.length === 0) {
+    setError('segments-error', 'Cần ít nhất 1 đoạn thời gian.');
+    valid = false;
+  } else {
+    flashField('field-segments', true);
+  }
 
   if (!valid) return;
 
   setLoading(true);
   const requestId = 'req_' + Date.now();
   const payload = {
-    url: url || (sourceSelect?.selectedOptions[0]?.dataset?.url || ''),
+    url,
     segments,
     email,
     name: name || 'Anonymous',
     status: 'pending',
-    source_id: selectedSource || null,
     created_at: new Date().toISOString(),
     processed_at: null,
     result_links: [],
@@ -179,22 +176,22 @@ form.addEventListener('submit', async (e) => {
   try {
     await db.ref(`requests/${requestId}`).set(payload);
     saveRequestId(requestId);
-    sendTelegramNotification(payload, requestId).catch(err => console.warn('Telegram notification failed:', err));
-    showToast('Request submitted successfully!', 'success');
+    sendTelegramNotification(payload, requestId).catch(() => {});
+    showToast('Đã gửi yêu cầu thành công!', 'success');
     form.reset();
-    if (sourceSelect) sourceSelect.value = '';
     renderStatusList();
     listenToRequest(requestId);
   } catch (err) {
     console.error('Firebase write error:', err);
-    showToast('Failed to submit request. Please try again.', 'error');
+    showToast('Gửi thất bại. Vui lòng thử lại.', 'error');
   } finally {
     setLoading(false);
   }
 });
 
-function flashSegments(isValid) {
-  const field = segmentsInput.closest('.field');
+function flashField(fieldId, isValid) {
+  const field = document.getElementById(fieldId);
+  if (!field) return;
   const cls = isValid ? 'field-valid' : 'field-invalid';
   field.classList.add(cls);
   setTimeout(() => field.classList.remove(cls), 1200);
@@ -205,17 +202,15 @@ function flashSegments(isValid) {
 // ═══════════════════════════════════════════
 
 async function sendTelegramNotification(payload, requestId) {
-  const timestamp = new Date().toLocaleString();
   const text = [
-    '🎬 <b>New request!</b>',
-    `From: ${escapeHtml(payload.name)} (${escapeHtml(payload.email)})`,
+    '✂️ <b>Yêu cầu mới!</b>',
+    `Từ: ${escapeHtml(payload.name)} (${escapeHtml(payload.email)})`,
     `URL: ${escapeHtml(payload.url)}`,
     `Segments: ${payload.segments.length}`,
     `ID: <code>${requestId}</code>`,
-    `Time: ${timestamp}`
+    `Time: ${new Date().toLocaleString()}`
   ].join('\n');
-  const apiUrl = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`;
-  await fetch(apiUrl, {
+  await fetch(`https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: CONFIG.telegram.chatId, text, parse_mode: 'HTML', disable_web_page_preview: true })
@@ -223,19 +218,21 @@ async function sendTelegramNotification(payload, requestId) {
 }
 
 // ═══════════════════════════════════════════
-//  LOCAL STORAGE HELPERS
+//  LOCAL STORAGE
 // ═══════════════════════════════════════════
 
 function getRequestIds() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; } catch { return []; } }
-function saveRequestId(id) { const ids = getRequestIds(); if (!ids.includes(id)) { ids.unshift(id); localStorage.setItem(STORAGE_KEY, JSON.stringify(ids)); } }
-function clearRequestHistory() {
+function saveRequestId(id) {
   const ids = getRequestIds();
-  ids.forEach(id => { try { db.ref(`requests/${id}`).off(); } catch (_) {} });
+  if (!ids.includes(id)) { ids.unshift(id); localStorage.setItem(STORAGE_KEY, JSON.stringify(ids)); }
+}
+function clearRequestHistory() {
+  getRequestIds().forEach(id => { try { db.ref(`requests/${id}`).off(); } catch (_) {} });
   activeListeners.clear();
   requestDataMap.clear();
   localStorage.removeItem(STORAGE_KEY);
   renderStatusList();
-  showToast('History cleared.', 'info');
+  showToast('Đã xoá lịch sử.', 'info');
 }
 clearBtn.addEventListener('click', clearRequestHistory);
 
@@ -246,12 +243,11 @@ clearBtn.addEventListener('click', clearRequestHistory);
 async function cancelRequest(requestId) {
   try {
     await db.ref(`requests/${requestId}/status`).set('cancelling');
-    showToast('Cancelling request...', 'info');
+    showToast('Đang huỷ yêu cầu...', 'info');
   } catch (err) {
-    showToast('Failed to cancel: ' + err.message, 'error');
+    showToast('Huỷ thất bại: ' + err.message, 'error');
   }
 }
-// Make globally accessible for onclick
 window.cancelRequest = cancelRequest;
 
 // ═══════════════════════════════════════════
@@ -265,53 +261,23 @@ function initAgentStatus() {
   function updateStatus(data) {
     if (!data || !data.last_heartbeat) {
       dotEl.className = 'agent-dot offline';
-      textEl.textContent = 'Agent offline';
+      textEl.textContent = 'Offline';
       return;
     }
     const age = Date.now() - new Date(data.last_heartbeat).getTime();
     if (age > 45000) {
       dotEl.className = 'agent-dot offline';
-      textEl.textContent = 'Agent offline';
+      textEl.textContent = 'Offline';
     } else {
       dotEl.className = 'agent-dot online';
-      textEl.textContent = data.processing ? `Processing ${data.processing}` : 'Agent online';
+      textEl.textContent = data.processing ? 'Đang xử lý...' : 'Online';
     }
   }
 
-  db.ref('agent_status').on('value', (snapshot) => updateStatus(snapshot.val()));
-
-  // Recheck periodically in case heartbeat stops
+  db.ref('agent_status').on('value', (snap) => updateStatus(snap.val()));
   setInterval(() => {
-    db.ref('agent_status').once('value', (snapshot) => updateStatus(snapshot.val()));
+    db.ref('agent_status').once('value', (snap) => updateStatus(snap.val()));
   }, 20000);
-}
-
-// ═══════════════════════════════════════════
-//  SOURCE SELECTOR
-// ═══════════════════════════════════════════
-
-function initSourceSelector() {
-  db.ref('sources').on('value', (snapshot) => {
-    const sources = snapshot.val();
-    sourceSelect.innerHTML = '<option value="">-- Tải video mới --</option>';
-    if (!sources) { sourceField.style.display = 'none'; return; }
-    sourceField.style.display = '';
-    Object.entries(sources).forEach(([hash, src]) => {
-      const opt = document.createElement('option');
-      opt.value = hash;
-      const sizeMB = src.file_size_mb ? `${src.file_size_mb} MB` : '';
-      const title = src.title || src.url;
-      const truncTitle = title.length > 60 ? title.substring(0, 60) + '…' : title;
-      opt.textContent = `${truncTitle} (${sizeMB})`;
-      opt.dataset.url = src.url;
-      sourceSelect.appendChild(opt);
-    });
-  });
-
-  sourceSelect.addEventListener('change', () => {
-    const selected = sourceSelect.selectedOptions[0];
-    if (selected && selected.dataset.url) { urlInput.value = selected.dataset.url; }
-  });
 }
 
 // ═══════════════════════════════════════════
@@ -319,7 +285,7 @@ function initSourceSelector() {
 // ═══════════════════════════════════════════
 
 const activeListeners = new Set();
-const STEP_NAMES = ['Tải video', 'Cắt highlight', 'Upload Drive', 'Gửi email'];
+const STEP_NAMES = ['Tải & cắt', 'Upload', 'Email'];
 
 function listenToRequest(requestId) {
   if (activeListeners.has(requestId)) return;
@@ -329,7 +295,7 @@ function listenToRequest(requestId) {
     if (!data) return;
     requestDataMap.set(requestId, data);
     updateStatusItem(requestId, data);
-  }, (err) => { console.error(`Listener error for ${requestId}:`, err); });
+  });
 }
 
 function updateStatusItem(requestId, data) {
@@ -341,28 +307,40 @@ function updateStatusItem(requestId, data) {
     statusList.appendChild(item);
   }
 
-  const truncatedUrl = truncateUrl(data.url || '', 50);
+  const truncatedUrl = truncateUrl(data.url || '', 45);
   const createdAt = data.created_at ? formatRelativeTime(data.created_at) : '';
   const segCount = data.segments ? data.segments.length : 0;
   const status = data.status || 'pending';
-  const badgeClass = `badge badge-${status}`;
-  const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+  const statusLabels = {
+    pending: 'Đang chờ',
+    processing: 'Đang xử lý',
+    done: 'Hoàn thành',
+    error: 'Lỗi',
+    cancelling: 'Đang huỷ',
+    cancelled: 'Đã huỷ'
+  };
+  const statusLabel = statusLabels[status] || status;
 
   let extras = '';
   const progress = data.progress;
 
-  // ── Progress bar (only during downloading step) ──
+  // ── Progress bar + segment info ──
   if (status === 'processing' && progress && progress.step === 'downloading' && progress.percent != null) {
     const pct = Math.min(progress.percent, 100);
-    const dlInfo = progress.downloaded ? `📥 ${progress.downloaded}` : '';
+    const segInfo = progress.segment_index ? `📦 Đoạn ${progress.segment_index}/${progress.segment_total}` : '';
+    const rangeInfo = progress.segment_range && progress.segment_range !== 'done' ? `⏱️ ${progress.segment_range}` : '';
+    const dlInfo = progress.downloaded ? `${progress.downloaded}` : '';
     const totalInfo = progress.total_size ? ` / ${progress.total_size}` : '';
     const speedInfo = progress.speed ? `⚡ ${progress.speed}` : '';
-    const etaInfo = progress.eta ? `⏱️ ETA ${progress.eta}` : '';
+    const etaInfo = progress.eta ? `ETA ${progress.eta}` : '';
+    const fileInfo = progress.current_file ? `📄 ${progress.current_file}` : '';
     const elapsedHtml = data.processing_started_at
       ? `<span class="elapsed-time" data-start="${escapeAttr(data.processing_started_at)}">⏳ ${formatElapsed(data.processing_started_at)}</span>`
       : '';
     extras += `
       <div class="progress-container">
+        ${segInfo || rangeInfo ? `<div class="progress-segment-info">${segInfo} ${rangeInfo}</div>` : ''}
+        ${fileInfo ? `<div class="progress-file-info">${fileInfo}</div>` : ''}
         <div class="progress-bar-wrap"><div class="progress-bar" style="width: ${pct}%"></div></div>
         <div class="progress-stats">
           <span>${dlInfo}${totalInfo}</span>
@@ -373,7 +351,7 @@ function updateStatusItem(requestId, data) {
       </div>`;
   }
 
-  // ── Step tracker (during processing) ──
+  // ── Step tracker ──
   if (status === 'processing' && progress) {
     const currentStep = progress.step_num || 1;
     let stepsHtml = '';
@@ -387,15 +365,17 @@ function updateStatusItem(requestId, data) {
         cls = 'done'; icon = '✓';
       } else if (stepNum === currentStep) {
         cls = 'active'; icon = '⏳';
-        // Details for active step
-        if (progress.step === 'downloading' && progress.percent != null) {
-          detail = `${Math.round(progress.percent)}%`;
-        } else if (progress.step === 'cutting' && progress.cut_index) {
-          detail = `${progress.cut_index}/${progress.cut_total} clips`;
+        if (progress.step === 'downloading') {
+          if (progress.segment_index) {
+            detail = `${progress.segment_index}/${progress.segment_total}`;
+            if (progress.percent != null) detail += ` · ${Math.round(progress.percent)}%`;
+          } else if (progress.percent != null) {
+            detail = `${Math.round(progress.percent)}%`;
+          }
         } else if (progress.step === 'uploading' && progress.current_file) {
           detail = progress.current_file;
         } else if (progress.step === 'emailing') {
-          detail = progress.current_file || 'sending...';
+          detail = 'đang gửi...';
         }
       }
 
@@ -411,36 +391,46 @@ function updateStatusItem(requestId, data) {
     extras += `<div class="step-tracker">${stepsHtml}</div>`;
   }
 
-  // ── Elapsed time for processing ──
+  // ── Elapsed time fallback ──
   if (status === 'processing' && data.processing_started_at && !progress) {
     extras += `<div class="elapsed-time" data-start="${escapeAttr(data.processing_started_at)}">⏳ ${formatElapsed(data.processing_started_at)}</div>`;
   }
 
   // ── Cancel button ──
   if (status === 'pending' || status === 'processing') {
-    extras += `<button class="btn-cancel" onclick="cancelRequest('${escapeAttr(requestId)}')">❌ Hủy request</button>`;
+    extras += `<button class="btn-cancel" onclick="cancelRequest('${escapeAttr(requestId)}')">❌ Huỷ</button>`;
   }
 
   // ── Result links ──
   if (status === 'done' && data.result_links && data.result_links.length > 0) {
     const links = data.result_links
+      .filter(l => !l.startsWith('file://'))
       .map((link, i) => `<a href="${escapeAttr(link)}" target="_blank" rel="noopener">📥 Clip ${i + 1}</a>`)
       .join('');
-    extras += `<div class="status-results">${links}</div>`;
+    if (links) {
+      extras += `<div class="result-links">${links}</div>`;
+    }
+  }
+
+  // ── Done info ──
+  if (status === 'done') {
+    const hlCount = data.highlight_count || segCount;
+    const sizeMB = data.total_size_mb ? `${data.total_size_mb} MB` : '';
+    extras += `<div class="progress-stats" style="margin-top:6px"><span>✅ ${hlCount} clip${hlCount !== 1 ? 's' : ''} ${sizeMB ? '· ' + sizeMB : ''} · Đã gửi email</span></div>`;
   }
 
   // ── Error message ──
   if (status === 'error' && data.error_message) {
-    extras += `<div class="status-error-msg">⚠ ${escapeHtml(data.error_message)}</div>`;
+    extras += `<div class="error-msg">⚠ ${escapeHtml(data.error_message)}</div>`;
   }
 
   item.innerHTML = `
-    <div class="status-item-row">
+    <div class="status-item-header">
       <span class="status-url" title="${escapeAttr(data.url || '')}">${escapeHtml(truncatedUrl)}</span>
-      <span class="${badgeClass}">${statusLabel}</span>
+      <span class="badge badge-${status}">${statusLabel}</span>
     </div>
     <div class="status-meta">
-      <span class="segment-count">${segCount} segment${segCount !== 1 ? 's' : ''}</span>
+      <span>✂️ ${segCount} đoạn</span>
       <span>${createdAt}</span>
     </div>
     ${extras}
@@ -467,24 +457,21 @@ function truncateUrl(url, max) { if (url.length <= max) return url; return url.s
 
 function formatRelativeTime(isoString) {
   try {
-    const date = new Date(isoString);
-    const now = new Date();
-    const diffMs = now - date;
+    const diffMs = Date.now() - new Date(isoString).getTime();
     const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return 'Just now';
-    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffMin < 1) return 'Vừa xong';
+    if (diffMin < 60) return `${diffMin} phút trước`;
     const diffHr = Math.floor(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
+    if (diffHr < 24) return `${diffHr} giờ trước`;
     const diffDay = Math.floor(diffHr / 24);
-    if (diffDay < 7) return `${diffDay}d ago`;
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    if (diffDay < 7) return `${diffDay} ngày trước`;
+    return new Date(isoString).toLocaleDateString('vi-VN', { month: 'short', day: 'numeric' });
   } catch { return ''; }
 }
 
 function formatElapsed(startIso) {
   try {
-    const start = new Date(startIso);
-    const diff = Math.floor((Date.now() - start.getTime()) / 1000);
+    const diff = Math.floor((Date.now() - new Date(startIso).getTime()) / 1000);
     if (diff < 0) return '0s';
     if (diff < 60) return `${diff}s`;
     const m = Math.floor(diff / 60);
@@ -502,9 +489,8 @@ function formatElapsed(startIso) {
 document.addEventListener('DOMContentLoaded', () => {
   renderStatusList();
   initAgentStatus();
-  initSourceSelector();
 
-  // Update elapsed times every second for processing requests
+  // Update elapsed times every second
   setInterval(() => {
     document.querySelectorAll('.elapsed-time[data-start]').forEach(el => {
       el.textContent = '⏳ ' + formatElapsed(el.dataset.start);
