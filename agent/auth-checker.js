@@ -51,7 +51,7 @@ export async function checkYouTubeCookies(config) {
         '--cookies', cookiesFile,
         '--skip-download', '--no-warnings', '-j',
         TEST_URL,
-      ], 20000);
+      ], 45000);
 
       if (result.code === 0 && result.stdout.includes('"id"')) {
         console.log(`${ts()}    ✅ Cookies OK — YouTube authenticated`);
