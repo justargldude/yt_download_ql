@@ -225,6 +225,7 @@ export async function processRequest(request, requestId, config, db, checkCancel
 
       const dlArgs = [
         '--force-ipv4',
+        '--js-runtimes', 'node',
         '--concurrent-fragments', String(config.settings?.concurrentFragments || 16),
         '--retries', '10', '--fragment-retries', '10',
         '--user-agent', UA,
@@ -250,7 +251,7 @@ export async function processRequest(request, requestId, config, db, checkCancel
       // aria2c không tương thích với live stream
       if (useAria2c && !isLiveUrl) {
         dlArgs.push('--downloader', aria2cPath);
-        dlArgs.push('--downloader-args', 'aria2c:-x 16 -s 16 -j 16 -k 1M --allow-overwrite=true --auto-file-renaming=false --disable-ipv6=true');
+        dlArgs.push('--downloader-args', 'aria2c:-x 16 -s 16 -j 16 -k 1M --allow-overwrite=true --auto-file-renaming=false --disable-ipv6=true --async-dns-server=8.8.8.8,1.1.1.1');
       }
       dlArgs.push(request.url);
 
