@@ -134,8 +134,12 @@ export async function processRequest(request, requestId, config, db, checkCancel
 
   const ffmpegDir = path.dirname(config.paths.ffmpeg);
   const ytdlpDir = path.dirname(config.paths.ytdlp);
-  const aria2cPath = path.join(ytdlpDir, 'aria2c');
-  const useAria2c = existsSync(aria2cPath);
+  let aria2cPath = path.join(ytdlpDir, 'aria2c');
+  let useAria2c = existsSync(aria2cPath);
+  if (!useAria2c && existsSync('/usr/bin/aria2c')) {
+    aria2cPath = '/usr/bin/aria2c';
+    useAria2c = true;
+  }
   const cookiesFile = config.paths.cookiesFile;
   const totalSegments = segments.length;
   const datePart = (request.created_at || new Date().toISOString()).split('T')[0].replace(/-/g, '');
@@ -245,8 +249,8 @@ export async function processRequest(request, requestId, config, db, checkCancel
 
       // aria2c không tương thích với live stream
       if (useAria2c && !isLiveUrl) {
-        dlArgs.push('--downloader', 'aria2c');
-        dlArgs.push('--downloader-args', 'aria2c:-x 16 -s 16 -j 16 -k 1M --allow-overwrite=true --auto-file-renaming=false');
+        dlArgs.push('--downloader', aria2cPath);
+        dlArgs.push('--downloader-args', 'aria2c:-x 16 -s 16 -j 16 -k 1M --allow-overwrite=true --auto-file-renaming=false --disable-ipv6=true');
       }
       dlArgs.push(request.url);
 
