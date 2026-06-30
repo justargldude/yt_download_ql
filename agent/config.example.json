@@ -17,11 +17,22 @@
     "serviceAccountPath": "./gdrive-service-account.json",
     "folderId": "YOUR_SHARED_FOLDER_ID"
   },
+  "dlib_upload": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8765,
+    "apiKey": "",
+    "maxUploadMB": 500,
+    "allowedOrigins": [
+      "https://dlib.ptit.edu.vn",
+      "chrome-extension://"
+    ]
+  },
   "paths": {
-    "ytdlp": "C:\\Users\\lnv\\Downloads\\yt-dlp.exe",
-    "ffmpeg": "C:\\Users\\lnv\\Downloads\\ffmpeg.exe",
-    "outputDir": "C:\\Users\\lnv\\Downloads\\YT_Queue_Output",
-    "cookiesFile": "C:\\Users\\lnv\\Downloads\\cookies.txt"
+    "ytdlp": "/usr/bin/yt-dlp",
+    "ffmpeg": "/usr/bin/ffmpeg",
+    "outputDir": "~/YT_Queue_Output",
+    "cookiesFile": "~/cookies.txt"
   },
   "settings": {
     "pollIntervalMs": 30000,

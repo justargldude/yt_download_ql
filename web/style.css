@@ -707,3 +707,110 @@ body {
     margin-bottom: 0;
   }
 }
+
+/* ═══════════════════════════════════════════
+   FULL DOWNLOAD TOGGLE + LIVE BADGE
+   ═══════════════════════════════════════════ */
+
+.field-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.toggle-label input[type="checkbox"] {
+  display: none;
+}
+
+.toggle-switch {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  background: var(--surface-hover, #333);
+  border-radius: 12px;
+  transition: background 0.25s ease;
+  flex-shrink: 0;
+}
+
+.toggle-switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.25s ease;
+}
+
+.toggle-label input:checked + .toggle-switch {
+  background: var(--accent, #6c5ce7);
+}
+
+.toggle-label input:checked + .toggle-switch::after {
+  transform: translateX(18px);
+}
+
+.toggle-text small {
+  color: var(--text-muted, #888);
+}
+
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: rgba(255, 0, 0, 0.15);
+  color: #ff4444;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Segments field hidden when full download is on */
+.field-segments-hidden {
+  opacity: 0.3;
+  pointer-events: none;
+  max-height: 60px;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+/* Live progress in status card */
+.progress-live-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 0, 0, 0.08);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+  color: #ff6b6b;
+}
+
+.progress-live-dot {
+  width: 8px;
+  height: 8px;
+  background: #ff4444;
+  border-radius: 50%;
+  animation: live-pulse 1.5s ease-in-out infinite;
+}

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>PTIT DLib Downloader</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <h1>PTIT DLib Downloader</h1>
+
+    <!-- No document detected -->
+    <div id="no-doc" class="section" style="display:none;">
+      <p class="msg-warn">Không tìm thấy tài liệu.<br>Mở một trang xem sách trên <b>dlib.ptit.edu.vn</b> rồi thử lại.</p>
+    </div>
+
+    <!-- Document info -->
+    <div id="doc-info" class="section" style="display:none;">
+      <table>
+        <tr><td class="lbl">Doc ID</td><td id="val-doc" class="val mono">—</td></tr>
+        <tr><td class="lbl">Subfolder</td><td id="val-sub" class="val mono">—</td></tr>
+        <tr><td class="lbl">Pages</td><td id="val-pages" class="val">—</td></tr>
+      </table>
+
+      <button id="btn-download">Upload to Drive</button>
+
+      <details id="upload-settings">
+        <summary>Upload settings</summary>
+        <label for="upload-endpoint">Endpoint</label>
+        <input id="upload-endpoint" type="url" spellcheck="false" autocomplete="off">
+        <label for="upload-api-key">API key</label>
+        <input id="upload-api-key" type="password" spellcheck="false" autocomplete="off">
+      </details>
+    </div>
+
+    <!-- Progress -->
+    <div id="progress-section" class="section" style="display:none;">
+      <div id="status-text">Preparing…</div>
+      <div class="progress-bar">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+      <div id="progress-text" class="progress-text">0 / 0</div>
+      <button id="btn-cancel" class="btn-cancel">✖ Hủy</button>
+    </div>
+
+    <!-- Result -->
+    <div id="result-section" class="section" style="display:none;">
+      <p id="result-text"></p>
+      <a id="result-link" class="result-link" href="#" target="_blank" rel="noopener" style="display:none;">Open Drive link</a>
+    </div>
+
+    <!-- Error -->
+    <div id="error-section" class="section" style="display:none;">
+      <p id="error-text" class="msg-err"></p>
+      <button id="btn-retry">🔄 Thử lại</button>
+    </div>
+
+    <!-- Log -->
+    <details id="log-details">
+      <summary>Log</summary>
+      <pre id="log-area"></pre>
+    </details>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

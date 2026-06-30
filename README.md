@@ -1,4 +1,4 @@
-# YT Highlight Queue - Hướng dẫn cài đặt
+# YT Highlight Queue - Hướng dẫn cài đặt (Ubuntu/Linux)
 
 Hệ thống cho phép bất kỳ ai gửi yêu cầu tải + cắt highlight YouTube qua web.
 Khi PC bạn bật, hệ thống tự động xử lý và gửi kết quả qua email.
@@ -6,7 +6,7 @@ Khi PC bạn bật, hệ thống tự động xử lý và gửi kết quả qua
 ## Kiến trúc
 
 ```
-[Người gửi] → [Web Form (GitHub Pages)] → [Firebase Database] → [PC của bạn] → [Email cho người gửi]
+[Người gửi] → [Web Form (GitHub Pages)] → [Firebase Database] → [Ubuntu PC] → [Email cho người gửi]
                                                 ↓
                                         [Telegram thông báo]
 ```
@@ -69,7 +69,7 @@ Khi PC bạn bật, hệ thống tự động xử lý và gửi kết quả qua
 
 1. Truy cập https://myaccount.google.com/apppasswords
 2. Đăng nhập Gmail bạn muốn dùng để gửi email
-3. Chọn **App:** Mail, **Device:** Windows
+3. Chọn **App:** Mail, **Device:** Other → đặt tên (VD: `YT Bot`)
 4. Click **Generate** → Copy mật khẩu 16 ký tự (dạng: `abcd efgh ijkl mnop`)
 5. **Lưu ý:** Cần bật 2-Step Verification trước
 
@@ -118,6 +118,12 @@ Dùng cho upload file lớn.
   "google_drive": {
     "serviceAccountPath": "./gdrive-service-account.json",
     "folderId": "1abc..."
+  },
+  "paths": {
+    "ytdlp": "/usr/bin/yt-dlp",
+    "ffmpeg": "/usr/bin/ffmpeg",
+    "outputDir": "~/YT_Queue_Output",
+    "cookiesFile": "~/cookies.txt"
   }
 }
 ```
@@ -126,15 +132,40 @@ Dùng cho upload file lớn.
 
 ## Bước 6: Cài đặt và chạy Agent
 
-```cmd
-cd C:\Users\lnv\Downloads\yt-web-queue\agent
+### Cài tools cần thiết:
+```bash
+# yt-dlp + ffmpeg + aria2c
+sudo apt update
+sudo apt install -y ffmpeg aria2
+pip install yt-dlp    # hoặc: sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && sudo chmod a+rx /usr/local/bin/yt-dlp
+```
+
+### Chạy Agent:
+```bash
+cd ~/yt-web-queue/agent
 npm install
 node agent.js
 ```
 
-### Tự động chạy khi bật PC:
-```cmd
+### Chạy với auto-restart:
+```bash
+./start.sh
+```
+
+### Tự động chạy khi bật PC (systemd service):
+```bash
 node install-service.js
+```
+
+Lệnh trên sẽ tạo systemd user service, agent tự khởi động khi login và tự restart khi crash.
+
+Các lệnh quản lý hữu ích:
+```bash
+systemctl --user status yt-queue-agent     # Xem trạng thái
+systemctl --user restart yt-queue-agent    # Restart agent
+systemctl --user stop yt-queue-agent       # Dừng agent
+journalctl --user -u yt-queue-agent -f     # Xem logs real-time
+systemctl --user disable yt-queue-agent    # Tắt auto-start
 ```
 
 ---
@@ -172,7 +203,7 @@ yt-web-queue/
 │   ├── index.html
 │   ├── style.css
 │   └── app.js
-├── agent/                        ← Chạy trên PC
+├── agent/                        ← Chạy trên Ubuntu PC
 │   ├── agent.js                  ← Main loop
 │   ├── processor.js              ← Download + cut
 │   ├── emailer.js                ← Gửi email
@@ -180,11 +211,13 @@ yt-web-queue/
 │   ├── telegram.js               ← Gửi Telegram
 │   ├── cleanup.js                ← Xóa file cũ
 │   ├── config-loader.js          ← Load config
-│   ├── install-service.js        ← Cài auto-start
-│   ├── start.bat                 ← Chạy thủ công
+│   ├── install-service.js        ← Cài systemd service (auto-start)
+│   ├── start.sh                  ← Chạy thủ công (auto-restart)
 │   ├── package.json
 │   ├── config.example.json       ← Template (copy → config.json)
 │   ├── firebase-service-account.json  ← Bạn tự thêm
 │   └── gdrive-service-account.json    ← Bạn tự thêm
+├── push_to_github.sh             ← Đẩy code lên GitHub
+├── start_tunnel.sh               ← Chạy ngrok tunnel cho DLib
 └── README.md                     ← File này
 ```

@@ -42,7 +42,7 @@ async function getDriveClient(config) {
 /**
  * Upload một file lên Google Drive.
  */
-export async function uploadToGoogleDrive(config, filePath, fileName) {
+export async function uploadToGoogleDrive(config, filePath, fileName, mimeType = 'video/mp4') {
   const driveConfig = config.google_drive;
   if (!driveConfig?.folderId) {
     throw new Error('Google Drive not configured (missing folderId)');
@@ -58,7 +58,7 @@ export async function uploadToGoogleDrive(config, filePath, fileName) {
       parents: [driveConfig.folderId],
     },
     media: {
-      mimeType: 'video/mp4',
+      mimeType,
       body: createReadStream(filePath),
     },
     fields: 'id, webViewLink',

@@ -36,6 +36,40 @@ const clearBtn = document.getElementById('clear-history-btn');
 const toastContainer = document.getElementById('toast-container');
 const sourceSelect = document.getElementById('source-select');
 const sourceField = document.getElementById('field-source');
+const fullDownloadCheckbox = document.getElementById('full-download');
+const liveBadge = document.getElementById('live-badge');
+const segmentsField = document.getElementById('field-segments');
+
+// ═══════════════════════════════════════════
+//  LIVE STREAM DETECTION
+// ═══════════════════════════════════════════
+
+function isLiveUrl(url) {
+  return /\/live\//i.test(url) || /[?&]live=/i.test(url);
+}
+
+if (urlInput) {
+  urlInput.addEventListener('input', () => {
+    const url = urlInput.value.trim();
+    if (isLiveUrl(url)) {
+      if (liveBadge) liveBadge.style.display = '';
+      if (fullDownloadCheckbox && !fullDownloadCheckbox.checked) {
+        fullDownloadCheckbox.checked = true;
+        fullDownloadCheckbox.dispatchEvent(new Event('change'));
+      }
+    } else {
+      if (liveBadge) liveBadge.style.display = 'none';
+    }
+  });
+}
+
+if (fullDownloadCheckbox) {
+  fullDownloadCheckbox.addEventListener('change', () => {
+    if (segmentsField) {
+      segmentsField.classList.toggle('field-segments-hidden', fullDownloadCheckbox.checked);
+    }
+  });
+}
 
 // ── Local Storage ──────────────────────────
 const STORAGE_KEY = 'yt_cut_requests';
@@ -101,7 +135,7 @@ function setError(id, msg) { const el = document.getElementById(id); if (el) el.
 //  TOAST NOTIFICATIONS
 // ═══════════════════════════════════════════
 
-const TOAST_ICONS = { success: '✅', error: '❌', info: 'ℹ️' };
+const TOAST_ICONS = { success: '✓', error: '✕', info: 'i' };
 
 function showToast(message, type = 'info') {
   const toast = document.createElement('div');
@@ -127,7 +161,7 @@ function dismissToast(toast) {
 function setLoading(loading) {
   submitBtn.disabled = loading;
   submitBtn.classList.toggle('loading', loading);
-  [urlInput, segmentsInput, emailInput, nameInput, sourceSelect].forEach(el => { if (el) el.disabled = loading; });
+  [urlInput, segmentsInput, emailInput, nameInput, sourceSelect, fullDownloadCheckbox].forEach(el => { if (el) el.disabled = loading; });
 }
 
 form.addEventListener('submit', async (e) => {
@@ -148,16 +182,19 @@ form.addEventListener('submit', async (e) => {
   if (!email) { setError('email-error', 'Vui lòng nhập email.'); valid = false; }
   else if (!isValidEmail(email)) { setError('email-error', 'Email không hợp lệ.'); valid = false; }
 
+  const isFullDownload = fullDownloadCheckbox?.checked || false;
   const { segments, errors } = parseSegments(rawSegments);
-  if (errors.length > 0) {
-    setError('segments-error', errors.join('; '));
-    flashField('field-segments', false);
-    valid = false;
-  } else if (segments.length === 0) {
-    setError('segments-error', 'Cần ít nhất 1 đoạn thời gian.');
-    valid = false;
-  } else {
-    flashField('field-segments', true);
+  if (!isFullDownload) {
+    if (errors.length > 0) {
+      setError('segments-error', errors.join('; '));
+      flashField('field-segments', false);
+      valid = false;
+    } else if (segments.length === 0) {
+      setError('segments-error', 'Cần ít nhất 1 đoạn thời gian.');
+      valid = false;
+    } else {
+      flashField('field-segments', true);
+    }
   }
 
   if (!valid) return;
@@ -169,7 +206,8 @@ form.addEventListener('submit', async (e) => {
   const requestId = 'req_' + Date.now();
   const payload = {
     url: finalUrl,
-    segments,
+    segments: isFullDownload ? [] : segments,
+    download_full: isFullDownload || false,
     email,
     name: name || 'Anonymous',
     status: 'pending',
@@ -274,23 +312,33 @@ function initSourceSelector() {
     sourceSelect.innerHTML = '<option value="">-- Tải video mới --</option>';
     if (!sources) { sourceField.style.display = 'none'; return; }
 
-    const entries = Object.entries(sources);
-    if (entries.length === 0) { sourceField.style.display = 'none'; return; }
+    const now = Date.now();
+    const MAX_AGE_MS = 12 * 3600000; // 12h
+    let validCount = 0;
 
-    sourceField.style.display = '';
-    entries.forEach(([hash, src]) => {
+    Object.entries(sources).forEach(([hash, src]) => {
+      const dlTime = src.downloaded_at ? new Date(src.downloaded_at).getTime() : 0;
+      const ageMs = dlTime ? (now - dlTime) : Infinity;
+
+      // Xoá entry đã hết hạn khỏi Firebase
+      if (ageMs > MAX_AGE_MS) {
+        db.ref(`sources/${hash}`).remove().catch(() => {});
+        return;
+      }
+
+      validCount++;
       const opt = document.createElement('option');
       opt.value = hash;
       const sizeMB = src.file_size_mb ? `${src.file_size_mb} MB` : '';
       const url = src.url || src.title || hash;
       const truncUrl = url.length > 55 ? url.substring(0, 55) + '…' : url;
-      // Tính thời gian còn lại trước khi xoá
-      const dlTime = src.downloaded_at ? new Date(src.downloaded_at).getTime() : 0;
-      const hoursLeft = dlTime ? Math.max(0, 12 - (Date.now() - dlTime) / 3600000).toFixed(0) : '?';
+      const hoursLeft = Math.max(0, 12 - ageMs / 3600000).toFixed(0);
       opt.textContent = `♻️ ${truncUrl} (${sizeMB}, còn ${hoursLeft}h)`;
       opt.dataset.url = src.url || '';
       sourceSelect.appendChild(opt);
     });
+
+    sourceField.style.display = validCount > 0 ? '' : 'none';
   });
 
   sourceSelect.addEventListener('change', () => {
@@ -332,7 +380,7 @@ function initAgentStatus() {
 // ═══════════════════════════════════════════
 
 const activeListeners = new Set();
-const STEP_NAMES = ['Tải video', 'Upload', 'Email'];
+const STEP_NAMES = ['Tải video', 'Upload', 'Gửi email'];
 
 function listenToRequest(requestId) {
   if (activeListeners.has(requestId)) return;
@@ -372,17 +420,25 @@ function updateStatusItem(requestId, data) {
   const progress = data.progress;
 
   // ── Progress bar + segment info ──
-  if (status === 'processing' && progress && progress.step === 'downloading' && progress.percent != null) {
-    const pct = Math.min(progress.percent, 100);
-    const segInfo = progress.segment_index ? `📦 Đoạn ${progress.segment_index}/${progress.segment_total}` : '';
-    const rangeInfo = progress.segment_range && progress.segment_range !== 'done' ? `⏱️ ${progress.segment_range}` : '';
+  if (status === 'processing' && progress && progress.step === 'downloading') {
+    // Live stream indicator
+    if (progress.is_live) {
+      extras += `
+        <div class="progress-live-info">
+          <span class="progress-live-dot"></span>
+          <span>Đang tải live stream...</span>
+        </div>`;
+    }
+    const pct = Math.min(progress.percent || 0, 100);
+    const segInfo = progress.segment_index ? `Đoạn ${progress.segment_index}/${progress.segment_total}` : '';
+    const rangeInfo = progress.segment_range && progress.segment_range !== 'done' ? `${progress.segment_range}` : '';
     const dlInfo = progress.downloaded ? `${progress.downloaded}` : '';
     const totalInfo = progress.total_size ? ` / ${progress.total_size}` : '';
-    const speedInfo = progress.speed ? `⚡ ${progress.speed}` : '';
+    const speedInfo = progress.speed ? `${progress.speed}` : '';
     const etaInfo = progress.eta ? `ETA ${progress.eta}` : '';
-    const fileInfo = progress.current_file ? `📄 ${progress.current_file}` : '';
+    const fileInfo = progress.current_file ? `${progress.current_file}` : '';
     const elapsedHtml = data.processing_started_at
-      ? `<span class="elapsed-time" data-start="${escapeAttr(data.processing_started_at)}">⏳ ${formatElapsed(data.processing_started_at)}</span>`
+      ? `<span class="elapsed-time" data-start="${escapeAttr(data.processing_started_at)}">${formatElapsed(data.processing_started_at)}</span>`
       : '';
     extras += `
       <div class="progress-container">
@@ -401,8 +457,10 @@ function updateStatusItem(requestId, data) {
   // ── Step tracker ──
   if (status === 'processing' && progress) {
     const currentStep = progress.step_num || 1;
+    const totalSteps = progress.total_steps || 3;
+    const stepNames = totalSteps === 2 ? ['Tải video', 'Upload & Email'] : STEP_NAMES;
     let stepsHtml = '';
-    STEP_NAMES.forEach((name, idx) => {
+    stepNames.forEach((name, idx) => {
       const stepNum = idx + 1;
       let cls = '';
       let icon = String(stepNum);
@@ -440,19 +498,19 @@ function updateStatusItem(requestId, data) {
 
   // ── Elapsed time fallback ──
   if (status === 'processing' && data.processing_started_at && !progress) {
-    extras += `<div class="elapsed-time" data-start="${escapeAttr(data.processing_started_at)}">⏳ ${formatElapsed(data.processing_started_at)}</div>`;
+    extras += `<div class="elapsed-time" data-start="${escapeAttr(data.processing_started_at)}">${formatElapsed(data.processing_started_at)}</div>`;
   }
 
   // ── Cancel button ──
   if (status === 'pending' || status === 'processing') {
-    extras += `<button class="btn-cancel" onclick="cancelRequest('${escapeAttr(requestId)}')">❌ Huỷ</button>`;
+    extras += `<button class="btn-cancel" onclick="cancelRequest('${escapeAttr(requestId)}')">Huỷ yêu cầu</button>`;
   }
 
   // ── Result links ──
   if (status === 'done' && data.result_links && data.result_links.length > 0) {
     const links = data.result_links
       .filter(l => !l.startsWith('file://'))
-      .map((link, i) => `<a href="${escapeAttr(link)}" target="_blank" rel="noopener">📥 Clip ${i + 1}</a>`)
+      .map((link, i) => `<a href="${escapeAttr(link)}" target="_blank" rel="noopener">Clip ${i + 1}</a>`)
       .join('');
     if (links) {
       extras += `<div class="result-links">${links}</div>`;
@@ -463,12 +521,16 @@ function updateStatusItem(requestId, data) {
   if (status === 'done') {
     const hlCount = data.highlight_count || segCount;
     const sizeMB = data.total_size_mb ? `${data.total_size_mb} MB` : '';
-    extras += `<div class="progress-stats" style="margin-top:6px"><span>✅ ${hlCount} clip${hlCount !== 1 ? 's' : ''} ${sizeMB ? '· ' + sizeMB : ''} · Đã gửi email</span></div>`;
+    if (data.download_full) {
+      extras += `<div class="progress-stats" style="margin-top:6px"><span>📹 Full video ${sizeMB ? '· ' + sizeMB : ''} · Đã gửi email</span></div>`;
+    } else {
+      extras += `<div class="progress-stats" style="margin-top:6px"><span>${hlCount} clip${hlCount !== 1 ? 's' : ''} ${sizeMB ? '· ' + sizeMB : ''} · Đã gửi email</span></div>`;
+    }
   }
 
   // ── Error message ──
   if (status === 'error' && data.error_message) {
-    extras += `<div class="error-msg">⚠ ${escapeHtml(data.error_message)}</div>`;
+    extras += `<div class="error-msg">${escapeHtml(data.error_message)}</div>`;
   }
 
   item.innerHTML = `
@@ -477,7 +539,7 @@ function updateStatusItem(requestId, data) {
       <span class="badge badge-${status}">${statusLabel}</span>
     </div>
     <div class="status-meta">
-      <span>✂️ ${segCount} đoạn</span>
+      <span>${segCount} đoạn</span>
       <span>${createdAt}</span>
     </div>
     ${extras}
@@ -541,7 +603,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Update elapsed times every second
   setInterval(() => {
     document.querySelectorAll('.elapsed-time[data-start]').forEach(el => {
-      el.textContent = '⏳ ' + formatElapsed(el.dataset.start);
+      el.textContent = formatElapsed(el.dataset.start);
     });
   }, 1000);
 });

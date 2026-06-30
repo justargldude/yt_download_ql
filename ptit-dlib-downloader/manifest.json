@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "PTIT DLib Downloader",
+  "version": "1.0.0",
+  "description": "Download documents from dlib.ptit.edu.vn as PDF",
+
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "notifications"
+  ],
+
+  "host_permissions": [
+    "*://dlib.ptit.edu.vn/*",
+    "http://127.0.0.1:*/*",
+    "http://localhost:*/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PTIT DLib Downloader"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["*://dlib.ptit.edu.vn/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

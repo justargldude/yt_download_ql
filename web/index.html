@@ -3,30 +3,25 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>YT CUT FOR HNYUQTL — Cắt highlight YouTube</title>
-  <meta name="description" content="Gửi link YouTube kèm thời gian, nhận highlight qua email. Nhanh và dễ dàng." />
+  <title>YT CUT FOR HNYUQTL</title>
+  <meta name="description" content="Gửi link YouTube kèm thời gian, nhận highlight qua email." />
   <meta name="theme-color" content="#1a1a2e" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-  <!-- Toast container -->
   <div id="toast-container" aria-live="polite"></div>
 
   <div class="app">
 
-    <!-- ─── Header ─── -->
     <header class="header">
       <div class="header-inner">
         <div class="logo">
-          <div class="logo-icon">✂️</div>
-          <div>
-            <h1>YT CUT <span class="accent">FOR HNYUQTL</span></h1>
-            <p class="tagline">Gửi link YouTube + thời gian → nhận clip qua email</p>
-          </div>
+          <h1>YT CUT <span class="accent">FOR HNYUQTL</span></h1>
+          <p class="tagline">Gửi link + thời gian, nhận clip qua email</p>
         </div>
         <div class="agent-badge" id="agent-status">
           <span class="agent-dot" id="agent-dot"></span>
@@ -35,82 +30,81 @@
       </div>
     </header>
 
-    <!-- ─── Main Content ─── -->
     <main class="main">
 
-      <!-- Form Card -->
       <form id="request-form" class="card form-card" novalidate autocomplete="off">
         <div class="card-header">
-          <h2>📋 Yêu cầu mới</h2>
+          <h2>Yêu cầu mới</h2>
         </div>
 
-        <!-- Source selector (video đã tải, cắt lại không cần tải) -->
         <div class="field" id="field-source" style="display:none">
-          <label for="source-select">♻️ Video đã tải <small>(cắt lại không cần tải)</small></label>
+          <label for="source-select">Video đã tải <small>(cắt lại, không cần tải)</small></label>
           <select id="source-select">
-            <option value="">-- Tải video mới --</option>
+            <option value="">Tải video mới</option>
           </select>
         </div>
 
-        <!-- YouTube URL -->
         <div class="field" id="field-url">
-          <label for="yt-url">🔗 Link YouTube</label>
-          <input type="url" id="yt-url" placeholder="https://www.youtube.com/watch?v=... hoặc /live/..." />
+          <label for="yt-url">Link YouTube</label>
+          <input type="url" id="yt-url" placeholder="https://www.youtube.com/watch?v=..." />
           <span class="field-error" id="url-error"></span>
         </div>
 
-        <!-- Time Segments -->
+        <div class="field field-toggle" id="field-fulldownload">
+          <label class="toggle-label">
+            <input type="checkbox" id="full-download" />
+            <span class="toggle-switch"></span>
+            <span class="toggle-text">Tải full video <small>(không cắt)</small></span>
+          </label>
+          <span class="live-badge" id="live-badge" style="display:none">🔴 LIVE</span>
+        </div>
+
         <div class="field" id="field-segments">
-          <label for="segments">⏱️ Đoạn cần cắt <small>(mỗi dòng 1 đoạn)</small></label>
+          <label for="segments">Đoạn cần cắt <small>(mỗi dòng 1 đoạn)</small></label>
           <textarea id="segments" rows="4" placeholder="27:00 - 27:35&#10;1:00:45 - 1:01:40&#10;4:35:50 - 4:36:50" required></textarea>
-          <div class="field-hint">Hỗ trợ: <code>mm:ss</code> <code>h:mm:ss</code> — Dấu ngăn: <code>-</code> <code>→</code> <code>~</code></div>
+          <div class="field-hint">Định dạng: <code>mm:ss</code> hoặc <code>h:mm:ss</code> — Ngăn cách bằng <code>-</code> <code>~</code> <code>→</code></div>
           <span class="field-error" id="segments-error"></span>
         </div>
 
-        <!-- Email + Name row -->
         <div class="field-row">
           <div class="field" id="field-email">
-            <label for="email">📧 Email nhận kết quả</label>
+            <label for="email">Email nhận kết quả</label>
             <input type="email" id="email" placeholder="you@email.com" required />
             <span class="field-error" id="email-error"></span>
           </div>
           <div class="field" id="field-name">
-            <label for="name">👤 Tên <small>(tuỳ chọn)</small></label>
-            <input type="text" id="name" placeholder="Tên của bạn" />
+            <label for="name">Tên <small>(tuỳ chọn)</small></label>
+            <input type="text" id="name" value="ql thúi" placeholder="Tên của bạn" />
           </div>
         </div>
 
-        <!-- Submit -->
         <button type="submit" id="submit-btn" class="btn-submit">
-          <span class="btn-label">✂️ Gửi yêu cầu cắt</span>
+          <span class="btn-label">Gửi yêu cầu</span>
           <span class="btn-spinner" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 2a10 10 0 0 1 10 10"/></svg>
           </span>
         </button>
       </form>
 
-      <!-- Status Section -->
       <section class="card status-card" id="status-section">
         <div class="card-header">
-          <h2>📦 Các yêu cầu của bạn</h2>
+          <h2>Lịch sử yêu cầu</h2>
           <button type="button" class="btn-clear" id="clear-history-btn" title="Xoá lịch sử">
-            🗑️ Xoá
+            Xoá
           </button>
         </div>
         <div id="status-list" class="status-list">
-          <p class="empty-state" id="empty-state">Chưa có yêu cầu nào. Gửi một yêu cầu ở trên!</p>
+          <p class="empty-state" id="empty-state">Chưa có yêu cầu nào.</p>
         </div>
       </section>
 
     </main>
 
-    <!-- ─── Footer ─── -->
     <footer class="footer">
-      <p>YT CUT FOR HNYUQTL · Highlight gửi qua email 💌</p>
+      <p>YT CUT FOR HNYUQTL</p>
     </footer>
   </div>
 
-  <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
   <script src="app.js"></script>

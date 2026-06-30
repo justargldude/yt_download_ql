@@ -5,11 +5,17 @@ import { readFile, rm } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import dns from 'dns';
+
+// Fix slow/broken IPv6 lookup hang on Linux
+dns.setDefaultResultOrder('ipv4first');
 
 import { loadConfig } from './config-loader.js';
 import { processRequest } from './processor.js';
 import { startCleanupJob } from './cleanup.js';
 import { sendTelegramMessage } from './telegram.js';
+import { runStartupChecks } from './auth-checker.js';
+import { startDlibUploadServer } from './dlib-upload-server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,17 +42,43 @@ function hashUrl(url) {
 // ── GLOBAL STATE ────────────────────────────────────────────────────────
 let db = null;
 let config = null;
-let isShuttingDown = false;
+let ytMode = 'cookies';                   // 'cookies' | 'browser' | 'none'
+let isShuttingDown = false;               // drain mode: xử lý hết queue rồi tắt
+let isForceShutdown = false;              // force quit ngay lập tức
 let processingCount = 0;
 let pollTimer = null;
 let heartbeatTimer = null;
 let currentRequestId = null;
+let dlibUploadServer = null;
+let isPolling = false;                    // mutex: ngăn nhiều poll chạy đồng thời
+const processingSet = new Set();          // track requestId đang xử lý → skip duplicate
+let shutdownResolve = null;               // resolve khi drain xong
+
+// ── WAIT FOR NETWORK (boot-time DNS retry) ──────────────────────────────
+async function waitForNetwork(maxRetries = 10, delayMs = 5000) {
+  for (let i = 1; i <= maxRetries; i++) {
+    try {
+      await new Promise((resolve, reject) => {
+        dns.resolve4('accounts.google.com', (err) => err ? reject(err) : resolve());
+      });
+      if (i > 1) console.log(`${ts()} ✅ Network ready (attempt ${i})`);
+      return;
+    } catch (err) {
+      console.log(`${ts()} ⏳ Waiting for network... (attempt ${i}/${maxRetries}: ${err.code || err.message})`);
+      if (i < maxRetries) await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  console.warn(`${ts()} ⚠️ Network not fully ready after ${maxRetries} attempts, proceeding anyway...`);
+}
 
 // ── MAIN ────────────────────────────────────────────────────────────────
 async function main() {
   console.log(`${ts()} ========================================`);
   console.log(`${ts()} 🎬 YT-Queue Agent v3.0.0`);
   console.log(`${ts()} ========================================`);
+
+  // 0. Wait for network (DNS) to be ready — important on boot
+  await waitForNetwork();
 
   // 1. Load config
   config = await loadConfig();
@@ -67,28 +99,92 @@ async function main() {
   db = getDatabase();
   console.log(`${ts()} ✅ Firebase connected: ${config.firebase.databaseURL}`);
 
-  // 3. Telegram: thông báo agent đã khởi động
-  await sendTelegramMessage(config, '🟢 Agent v3.0 started! Listening for requests...');
+  // 3. Kiểm tra quyền truy cập (YouTube cookies + Google Drive)
+  const authResult = await runStartupChecks(config);
+  ytMode = authResult.ytMode;
 
-  // 4. Start heartbeat
+  // Ghi auth status lên Firebase để web UI hiển thị
+  try {
+    await db.ref('auth_status').set({
+      youtube: ytMode,
+      drive_ok: authResult.driveOk,
+      drive_user: authResult.driveUser || null,
+      drive_error: authResult.driveError || null,
+      checked_at: new Date().toISOString(),
+    });
+  } catch (e) { /* ignore */ }
+
+  // 4. Local endpoint cho PTIT DLib extension upload PDF lên Drive
+  dlibUploadServer = await startDlibUploadServer(config);
+
+  // 4. Khôi phục các request bị gián đoạn/kẹt
+  await recoverInterruptedRequests();
+
+  // 5. Telegram: thông báo agent đã khởi động
+  const ytStatus = ytMode === 'cookies' ? '✅' : ytMode === 'browser' ? '🔄' : '❌';
+  const driveStatus = authResult.driveOk ? '✅' : '❌';
+  await sendTelegramMessage(config, `🟢 Agent started!\nYouTube: ${ytStatus} ${ytMode}\nDrive: ${driveStatus} ${authResult.driveUser || authResult.driveError || ''}`);
+
+  // 5. Start heartbeat
   startHeartbeat();
 
-  // 5. Start cleanup job
+  // 6. Start cleanup job
   startCleanupJob(config, db);
 
-  // 6. Lắng nghe real-time qua Firebase listener
+  // 7. Lắng nghe real-time qua Firebase listener
   setupRealtimeListener();
 
-  // 7. Main polling loop
+  // 8. Main polling loop
   console.log(`${ts()} 🔄 Starting poll loop...`);
   pollTimer = setInterval(() => pollForRequests(), config.settings.pollIntervalMs);
 
   // Chạy poll đầu tiên ngay lập tức
   pollForRequests();
 
-  // 8. Graceful shutdown
+  // 9. Graceful shutdown (Ctrl+C lần 1 = drain, lần 2 = force)
   process.on('SIGINT', handleShutdown);
   process.on('SIGTERM', handleShutdown);
+
+
+}
+
+// ── RECOVER INTERRUPTED REQUESTS ────────────────────────────────────────
+async function recoverInterruptedRequests() {
+  try {
+    const snapshot = await db.ref('requests').once('value');
+    const requests = snapshot.val();
+    if (!requests) return;
+
+    console.log(`${ts()} 🔄 Checking for stuck or interrupted requests...`);
+    let recoveredCount = 0;
+
+    for (const [requestId, request] of Object.entries(requests)) {
+      if (request.status === 'processing') {
+        console.log(`${ts()} 🔄 Resetting interrupted request: ${requestId} (processing -> pending)`);
+        await db.ref(`requests/${requestId}`).update({
+          status: 'pending',
+          progress: null,
+          processing_started_at: null,
+        });
+        recoveredCount++;
+      } else if (request.status === 'cancelling') {
+        console.log(`${ts()} 🔄 Resetting stuck cancelling request: ${requestId} (cancelling -> cancelled)`);
+        await db.ref(`requests/${requestId}`).update({
+          status: 'cancelled',
+          cancelled_at: new Date().toISOString(),
+        });
+        recoveredCount++;
+      }
+    }
+
+    if (recoveredCount > 0) {
+      console.log(`${ts()} ✅ Recovered/reset ${recoveredCount} request(s) on startup`);
+    } else {
+      console.log(`${ts()} 👍 No stuck requests found`);
+    }
+  } catch (err) {
+    console.error(`${ts()} ❌ Recovery error: ${err.message}`);
+  }
 }
 
 // ── HEARTBEAT ───────────────────────────────────────────────────────────
@@ -123,7 +219,8 @@ function setupRealtimeListener() {
   ref.orderByChild('status').equalTo('pending').on('child_added', (snapshot) => {
     const key = snapshot.key;
     console.log(`${ts()} 🔔 Real-time: new pending request detected → ${key}`);
-    if (processingCount === 0) {
+    // Chỉ trigger poll nếu không đang poll VÀ không đang xử lý request nào
+    if (!isPolling && processingCount === 0) {
       pollForRequests();
     }
   });
@@ -133,7 +230,9 @@ function setupRealtimeListener() {
 
 // ── POLL FOR PENDING REQUESTS ───────────────────────────────────────────
 async function pollForRequests() {
-  if (isShuttingDown) return;
+  if (isForceShutdown) return;
+  if (isPolling) return;   // mutex: skip nếu đang poll
+  isPolling = true;
 
   try {
     const snapshot = await db
@@ -143,22 +242,53 @@ async function pollForRequests() {
       .once('value');
 
     const requests = snapshot.val();
-    if (!requests) return;
+    if (!requests) {
+      // Nếu đang drain mode và không còn request pending → drain xong
+      if (isShuttingDown && processingCount === 0 && shutdownResolve) {
+        shutdownResolve();
+        shutdownResolve = null;
+      }
+      return;
+    }
 
-    const entries = Object.entries(requests);
+    // Lọc bỏ requests đang xử lý (tránh pick duplicate)
+    const entries = Object.entries(requests).filter(
+      ([id]) => !processingSet.has(id)
+    );
+    if (entries.length === 0) {
+      if (isShuttingDown && processingCount === 0 && shutdownResolve) {
+        shutdownResolve();
+        shutdownResolve = null;
+      }
+      return;
+    }
+
     console.log(`${ts()} 📋 Found ${entries.length} pending request(s)`);
 
     for (const [requestId, request] of entries) {
-      if (isShuttingDown) break;
+      if (isForceShutdown) break;
+      if (processingSet.has(requestId)) continue;  // double-check
       await handleSingleRequest(requestId, request);
+    }
+
+    // Sau khi xử lý xong tất cả entries trong drain mode → drain xong
+    if (isShuttingDown && processingCount === 0 && shutdownResolve) {
+      shutdownResolve();
+      shutdownResolve = null;
     }
   } catch (err) {
     console.error(`${ts()} ❌ Poll error: ${err.message}`);
+  } finally {
+    isPolling = false;
   }
 }
 
 // ── HANDLE ONE REQUEST ──────────────────────────────────────────────────
 async function handleSingleRequest(requestId, request) {
+  // Guard: skip nếu request đã đang xử lý
+  if (processingSet.has(requestId)) return;
+  processingSet.add(requestId);
+
   const reqRef = db.ref(`requests/${requestId}`);
   const name = request.name || 'Unknown';
   const url = request.url || '(no url)';
@@ -190,7 +320,7 @@ async function handleSingleRequest(requestId, request) {
     await sendTelegramMessage(config, `⚙️ Processing request from <b>${name}</b>...\n🔗 ${url}`);
 
     // c. Xử lý chính
-    const result = await processRequest(request, requestId, config, db, checkCancelled);
+    const result = await processRequest(request, requestId, config, db, checkCancelled, ytMode);
 
     // d. Cập nhật Firebase: done
     await reqRef.update({
@@ -198,6 +328,8 @@ async function handleSingleRequest(requestId, request) {
       result_links: result.resultLinks,
       highlight_count: result.highlightCount,
       total_size_mb: result.totalSizeMB,
+      download_full: result.isFullDownload || false,
+      is_live: result.isLive || false,
       processed_at: new Date().toISOString(),
     });
 
@@ -265,28 +397,85 @@ async function handleSingleRequest(requestId, request) {
   } finally {
     processingCount--;
     currentRequestId = null;
+    processingSet.delete(requestId);
   }
+}
+
+async function stopDlibUploadServer() {
+  if (!dlibUploadServer) return;
+  const server = dlibUploadServer;
+  dlibUploadServer = null;
+  await new Promise((resolve) => server.close(resolve));
 }
 
 // ── GRACEFUL SHUTDOWN ───────────────────────────────────────────────────
 async function handleShutdown() {
-  if (isShuttingDown) return;
+  // Lần 2: force quit ngay
+  if (isShuttingDown) {
+    isForceShutdown = true;
+    console.log(`\n${ts()} ⚡ Force shutdown! Exiting immediately...`);
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    await stopDlibUploadServer();
+    try {
+      await db.ref('agent_status').set({
+        online: false, last_heartbeat: new Date().toISOString(),
+        processing: null, version: '3.0.0',
+      });
+    } catch (e) { /* ignore */ }
+    await sendTelegramMessage(config, '🔴 Agent force-stopped.');
+    console.log(`${ts()} 👋 Force stopped. Goodbye!`);
+    process.exit(1);
+    return;
+  }
+
+  // Lần 1: drain mode — xử lý hết queue rồi tắt
   isShuttingDown = true;
 
-  console.log(`\n${ts()} 🛑 Shutting down gracefully...`);
+  console.log(`\n${ts()} 🛑 Drain mode: finishing current + remaining pending requests...`);
+  console.log(`${ts()} 💡 Press Ctrl+C again to force quit immediately.`);
 
+  // Dừng polling interval — ta sẽ chạy 1 poll cuối thủ công
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
 
+  // Giữ heartbeat chạy trong drain mode
+
+  // Nếu đang có request processing → chờ nó xong
   if (processingCount > 0) {
-    console.log(`${ts()} ⏳ Waiting for ${processingCount} request(s) to finish...`);
-    const deadline = Date.now() + 30000;
-    while (processingCount > 0 && Date.now() < deadline) {
+    console.log(`${ts()} ⏳ Waiting for ${processingCount} in-progress request(s)...`);
+    while (processingCount > 0 && !isForceShutdown) {
       await new Promise((r) => setTimeout(r, 1000));
     }
   }
 
-  // Set agent offline
+  if (isForceShutdown) return;
+
+  // Chờ poll đang chạy (nếu có) hoàn thành trước
+  while (isPolling && !isForceShutdown) {
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (isForceShutdown) return;
+
+  // Chạy 1 poll cuối để xử lý hết pending requests còn lại
+  console.log(`${ts()} 🔄 Draining remaining pending requests...`);
+  const drainDone = new Promise((resolve) => { shutdownResolve = resolve; });
+
+  // Poll 1 lần cuối — pollForRequests sẽ xử lý tuần tự hết entries
+  await pollForRequests();
+
+  // Nếu poll đã xong ngay (không còn pending) thì shutdownResolve đã được gọi
+  // Nếu chưa → chờ
+  if (shutdownResolve) {
+    // Vẫn còn đang xử lý → chờ drain xong (không giới hạn thời gian)
+    await drainDone;
+  }
+
+  if (isForceShutdown) return;
+
+  // Dọn dẹp
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  await stopDlibUploadServer();
+
   try {
     await db.ref('agent_status').set({
       online: false,
@@ -296,8 +485,9 @@ async function handleShutdown() {
     });
   } catch (e) { /* ignore */ }
 
-  await sendTelegramMessage(config, '🔴 Agent stopped.');
+  await sendTelegramMessage(config, '🔴 Agent stopped (drain complete).');
 
+  console.log(`${ts()} ✅ All pending requests processed!`);
   console.log(`${ts()} 👋 Agent stopped. Goodbye!`);
   process.exit(0);
 }

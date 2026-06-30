@@ -16,6 +16,9 @@ import { uploadToGoogleDrive } from './uploader.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
+// Download lock per URL hash — chỉ tải 1 lần dù nhiều request cùng URL
+const downloadLocks = new Map();  // urlHash → Promise<void>
+
 // ── URL HASH ────────────────────────────────────────────────────────────
 function hashUrl(url) {
   try {
@@ -84,7 +87,7 @@ function parseProgressLine(line) {
 // ── SPAWN ───────────────────────────────────────────────────────────────
 function spawnAsync(cmd, args, { prefix = '', cwd, onLine, onProc } = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { cwd, windowsHide: true });
+    const proc = spawn(cmd, args, { cwd, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let stderrBuf = '';
     if (onProc) onProc(proc);
     const handle = (chunk) => {
@@ -105,12 +108,12 @@ function spawnAsync(cmd, args, { prefix = '', cwd, onLine, onProc } = {}) {
 
 function killProcessTree(proc) {
   if (!proc || !proc.pid) return;
-  try { spawn('taskkill', ['/pid', String(proc.pid), '/t', '/f'], { windowsHide: true }); }
-  catch (e) { try { proc.kill(); } catch (e2) {} }
+  try { process.kill(-proc.pid, 'SIGTERM'); }
+  catch (e) { try { proc.kill('SIGKILL'); } catch (e2) {} }
 }
 
 // ═════════════════════════════════════════════════════════════════════════
-export async function processRequest(request, requestId, config, db, checkCancelled) {
+export async function processRequest(request, requestId, config, db, checkCancelled, ytMode = 'cookies') {
   const outputDir = path.join(config.paths.outputDir, requestId);
   const sourcesDir = path.join(config.paths.outputDir, 'sources');
   let currentProc = null;
@@ -127,15 +130,18 @@ export async function processRequest(request, requestId, config, db, checkCancel
   await mkdir(sourcesDir, { recursive: true });
 
   const segments = request.segments || [];
-  if (segments.length === 0) throw new Error('No segments specified.');
+  const isFullDownload = segments.length === 0 || request.download_full === true;
 
   const ffmpegDir = path.dirname(config.paths.ffmpeg);
   const ytdlpDir = path.dirname(config.paths.ytdlp);
-  const aria2cPath = path.join(ytdlpDir, 'aria2c.exe');
+  const aria2cPath = path.join(ytdlpDir, 'aria2c');
   const useAria2c = existsSync(aria2cPath);
   const cookiesFile = config.paths.cookiesFile;
   const totalSegments = segments.length;
   const datePart = (request.created_at || new Date().toISOString()).split('T')[0].replace(/-/g, '');
+
+  // Detect live stream từ URL pattern
+  const isLiveUrl = /\/live\//i.test(request.url) || /[?&]live=/i.test(request.url);
 
   // ═══════════════════════════════════════════════════════════════════════
   // STEP 1: DOWNLOAD (hoặc reuse source cache)
@@ -157,71 +163,160 @@ export async function processRequest(request, requestId, config, db, checkCancel
     console.log(`${ts()} ════════════════════════════════════════`);
 
     await pw.write({
-      step: 'downloading', step_num: 1, total_steps: 3, percent: 100,
+      step: 'downloading', step_num: 1, total_steps: isFullDownload ? 2 : 3, percent: 100,
       current_file: 'Dùng source cache', segment_range: `♻️ Đã tải trước — skip download!`,
     });
     sourceReused = true;
+  } else if (downloadLocks.has(urlHash)) {
+    // ── ĐANG CÓ REQUEST KHÁC TẢI CÙNG URL → chờ ──
+    console.log(`${ts()} ════════════════════════════════════════`);
+    console.log(`${ts()} ⏳ Another request is downloading this video, waiting...`);
+    console.log(`${ts()} 🔗 ${request.url}`);
+    console.log(`${ts()} ════════════════════════════════════════`);
+
+    await pw.write({
+      step: 'downloading', step_num: 1, total_steps: isFullDownload ? 2 : 3, percent: 0,
+      current_file: 'Chờ download từ request khác...', segment_range: `⏳ Cùng video đang được tải...`,
+    });
+
+    // Chờ download kia hoàn thành
+    try {
+      await downloadLocks.get(urlHash);
+    } catch (e) {
+      // Download kia lỗi — ta sẽ thử lại bên dưới
+    }
+
+    // Kiểm tra lại: nếu source đã có → dùng cache
+    if (existsSync(sourcePath)) {
+      const info = await stat(sourcePath);
+      const sizeMB = (info.size / 1024 / 1024).toFixed(0);
+      console.log(`${ts()} ♻️  Source now available after wait (${sizeMB} MB)`);
+      await pw.write({
+        step: 'downloading', step_num: 1, total_steps: isFullDownload ? 2 : 3, percent: 100,
+        current_file: 'Dùng source cache', segment_range: `♻️ Download xong — dùng cache!`,
+      });
+      sourceReused = true;
+    } else {
+      // Download kia lỗi, ta tự tải lại
+      console.log(`${ts()} ⚠️ Previous download failed, retrying ourselves...`);
+      await doDownload();
+    }
   } else {
     // ── DOWNLOAD MỚI ──
-    console.log(`${ts()} ════════════════════════════════════════`);
-    console.log(`${ts()} 📥 Downloading video → ${sourceDir}`);
-    console.log(`${ts()} 🔗 ${request.url}`);
-    if (useAria2c) console.log(`${ts()} 🚀 aria2c accelerator active`);
-    console.log(`${ts()} ════════════════════════════════════════`);
+    await doDownload();
+  }
 
-    const dlArgs = [
-      '--concurrent-fragments', String(config.settings?.concurrentFragments || 16),
-      '--retries', '10', '--fragment-retries', '10',
-      '--user-agent', UA,
-      '-f', 'bv*+ba/b', '--merge-output-format', 'mp4',
-      '--ffmpeg-location', ffmpegDir,
-      '-o', sourcePath, '--no-playlist',
-    ];
-    if (cookiesFile && existsSync(cookiesFile)) dlArgs.push('--cookies', cookiesFile);
-    if (/\/live\//i.test(request.url)) dlArgs.push('--live-from-start');
-    if (useAria2c) {
-      dlArgs.push('--downloader', 'aria2c');
-      dlArgs.push('--downloader-args', 'aria2c:-x 16 -s 16 -j 16 -k 1M --allow-overwrite=true --auto-file-renaming=false');
-    }
-    dlArgs.push(request.url);
-
-    const onDlLine = (line) => {
-      const prog = parseProgressLine(line);
-      if (prog) {
-        pw.write({
-          step: 'downloading', step_num: 1, total_steps: 3,
-          percent: Math.round(prog.percent || 0),
-          speed: prog.speed, eta: prog.eta,
-          downloaded: prog.downloaded || null, total_size: prog.total_size || null,
-          current_file: 'source.mp4',
-          segment_range: `Tải video → cắt ${totalSegments} đoạn`,
-        });
-      }
-    };
-
-    let dlCancelled = false;
-    const cancelCheck = setInterval(async () => {
-      try { if (await checkCancelled()) { dlCancelled = true; if (currentProc) killProcessTree(currentProc); } } catch (e) {}
-    }, 3000);
+  // Hàm download thực sự (tách ra để reuse)
+  async function doDownload() {
+    let lockResolve, lockReject;
+    const lockPromise = new Promise((res, rej) => { lockResolve = res; lockReject = rej; });
+    downloadLocks.set(urlHash, lockPromise);
 
     try {
-      await spawnAsync(config.paths.ytdlp, dlArgs, {
-        prefix: '[yt-dlp]', cwd: sourceDir, onLine: onDlLine,
-        onProc: (p) => { currentProc = p; }
-      });
+      console.log(`${ts()} ════════════════════════════════════════`);
+      console.log(`${ts()} 📥 Downloading video → ${sourceDir}`);
+      console.log(`${ts()} 🔗 ${request.url}`);
+      if (useAria2c) console.log(`${ts()} 🚀 aria2c accelerator active`);
+      console.log(`${ts()} ════════════════════════════════════════`);
+
+      const dlArgs = [
+        '--concurrent-fragments', String(config.settings?.concurrentFragments || 16),
+        '--retries', '10', '--fragment-retries', '10',
+        '--user-agent', UA,
+        '-f', 'bv*+ba/b', '--merge-output-format', 'mp4',
+        '--ffmpeg-location', ffmpegDir,
+        '-o', sourcePath, '--no-playlist',
+      ];
+      // YouTube auth: dùng cookies file hoặc đọc từ browser
+      if (ytMode === 'browser') {
+        dlArgs.push('--cookies-from-browser', 'chrome');
+      } else if (cookiesFile && existsSync(cookiesFile)) {
+        dlArgs.push('--cookies', cookiesFile);
+      }
+
+      // Live stream: tải từ đầu, chờ nếu chưa bắt đầu, không giới hạn fragment
+      if (isLiveUrl) {
+        dlArgs.push('--live-from-start');
+        dlArgs.push('--wait-for-video', '30-300');  // chờ 30s-5min nếu live chưa bắt đầu
+        dlArgs.push('--no-part');  // không dùng .part file
+        console.log(`${ts()} 🔴 Live stream detected — will download until stream ends`);
+      }
+
+      // aria2c không tương thích với live stream
+      if (useAria2c && !isLiveUrl) {
+        dlArgs.push('--downloader', 'aria2c');
+        dlArgs.push('--downloader-args', 'aria2c:-x 16 -s 16 -j 16 -k 1M --allow-overwrite=true --auto-file-renaming=false');
+      }
+      dlArgs.push(request.url);
+
+      const onDlLine = (line) => {
+        const prog = parseProgressLine(line);
+        if (prog) {
+          pw.write({
+            step: 'downloading', step_num: 1, total_steps: isFullDownload ? 2 : 3,
+            percent: Math.round(prog.percent || 0),
+            speed: prog.speed, eta: prog.eta,
+            downloaded: prog.downloaded || null, total_size: prog.total_size || null,
+            current_file: 'source.mp4',
+            is_live: isLiveUrl,
+            segment_range: isFullDownload
+              ? (isLiveUrl ? '🔴 Đang tải live stream...' : 'Tải full video')
+              : `Tải video → cắt ${totalSegments} đoạn`,
+          });
+        }
+        // Live: parse fragment count nếu không match progress thông thường
+        if (isLiveUrl && !prog) {
+          const fragMatch = line.match(/frag\s*(\d+)/i);
+          if (fragMatch) {
+            pw.write({
+              step: 'downloading', step_num: 1, total_steps: isFullDownload ? 2 : 3,
+              percent: 0,
+              current_file: `fragment ${fragMatch[1]}`,
+              is_live: true,
+              segment_range: '🔴 Đang tải live stream...',
+            });
+          }
+        }
+      };
+
+      let dlCancelled = false;
+      const cancelCheck = setInterval(async () => {
+        try { if (await checkCancelled()) { dlCancelled = true; if (currentProc) killProcessTree(currentProc); } } catch (e) {}
+      }, 3000);
+
+      try {
+        await spawnAsync(config.paths.ytdlp, dlArgs, {
+          prefix: '[yt-dlp]', cwd: sourceDir, onLine: onDlLine,
+          onProc: (p) => { currentProc = p; }
+        });
+      } catch (err) {
+        if (dlCancelled || await checkCancelled()) { clearInterval(cancelCheck); lockReject(err); throw new Error('CANCELLED'); }
+        // Retry without aria2c
+        if (useAria2c) {
+          console.log(`${ts()} ⚠️ aria2c failed, retrying native...`);
+          const retry = [];
+          for (let j = 0; j < dlArgs.length; j++) {
+            if (dlArgs[j] === '--downloader' || dlArgs[j] === '--downloader-args') {
+              j++; // skip flag + its value
+              continue;
+            }
+            retry.push(dlArgs[j]);
+          }
+          await assertNotCancelled();
+          try { await spawnAsync(config.paths.ytdlp, retry, { prefix: '[retry]', cwd: sourceDir, onLine: onDlLine, onProc: (p) => { currentProc = p; } }); }
+          catch (e2) { if (dlCancelled || await checkCancelled()) { clearInterval(cancelCheck); lockReject(e2); throw new Error('CANCELLED'); } lockReject(e2); throw e2; }
+        } else { lockReject(err); throw err; }
+      } finally { clearInterval(cancelCheck); }
+      currentProc = null;
+
+      lockResolve();  // Thông báo cho các request khác biết download xong
     } catch (err) {
-      if (dlCancelled || await checkCancelled()) { clearInterval(cancelCheck); throw new Error('CANCELLED'); }
-      // Retry without aria2c
-      if (useAria2c) {
-        console.log(`${ts()} ⚠️ aria2c failed, retrying native...`);
-        const clean = dlArgs.filter(a => a !== '--downloader' && a !== 'aria2c' && !a.startsWith('aria2c:'));
-        const retry = []; for (let j = 0; j < clean.length; j++) { if (clean[j] === '--downloader-args') { j++; continue; } retry.push(clean[j]); }
-        await assertNotCancelled();
-        try { await spawnAsync(config.paths.ytdlp, retry, { prefix: '[retry]', cwd: sourceDir, onLine: onDlLine, onProc: (p) => { currentProc = p; } }); }
-        catch (e2) { if (dlCancelled || await checkCancelled()) { clearInterval(cancelCheck); throw new Error('CANCELLED'); } throw e2; }
-      } else throw err;
-    } finally { clearInterval(cancelCheck); }
-    currentProc = null;
+      // Đảm bảo lock luôn được resolve/reject
+      try { lockReject(err); } catch (e) {}
+      throw err;
+    } finally {
+      downloadLocks.delete(urlHash);
+    }
   }
 
   // Find actual source file
@@ -248,45 +343,57 @@ export async function processRequest(request, requestId, config, db, checkCancel
     }), 'utf-8');
   } catch (e) { /* ignore */ }
 
-  await pw.write({ step: 'downloading', step_num: 1, total_steps: 3, percent: 100, segment_range: 'Đang cắt...' });
+  const totalSteps = isFullDownload ? 2 : 3;
+  let filesToUpload = [];
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // STEP 1b: CUT SEGMENTS
-  // ═══════════════════════════════════════════════════════════════════════
-  console.log(`${ts()} ✂️  Cutting ${totalSegments} segment(s)...`);
-  const highlightFiles = [];
+  if (isFullDownload) {
+    // ═══════════════════════════════════════════════════════════════════════
+    // FULL DOWNLOAD — skip cut, dùng source trực tiếp
+    // ═══════════════════════════════════════════════════════════════════════
+    console.log(`${ts()} 📦 Full download mode — skipping cut step`);
+    await pw.write({ step: 'downloading', step_num: 1, total_steps: totalSteps, percent: 100, segment_range: 'Tải xong!' });
+    filesToUpload = [actualSource];
+  } else {
+    // ═══════════════════════════════════════════════════════════════════════
+    // STEP 1b: CUT SEGMENTS
+    // ═══════════════════════════════════════════════════════════════════════
+    await pw.write({ step: 'downloading', step_num: 1, total_steps: totalSteps, percent: 100, segment_range: 'Đang cắt...' });
+    console.log(`${ts()} ✂️  Cutting ${totalSegments} segment(s)...`);
+    const highlightFiles = [];
 
-  for (let i = 0; i < totalSegments; i++) {
-    await assertNotCancelled();
-    const seg = segments[i];
-    const hlName = `HL_${datePart}_${timeTag(seg.start)}-${timeTag(seg.end)}.mp4`;
-    const hlPath = path.join(outputDir, hlName);
+    for (let i = 0; i < totalSegments; i++) {
+      await assertNotCancelled();
+      const seg = segments[i];
+      const hlName = `HL_${datePart}_${timeTag(seg.start)}-${timeTag(seg.end)}.mp4`;
+      const hlPath = path.join(outputDir, hlName);
 
-    console.log(`${ts()} ✂️  [${i + 1}/${totalSegments}] ${seg.start} → ${seg.end} → ${hlName}`);
+      console.log(`${ts()} ✂️  [${i + 1}/${totalSegments}] ${seg.start} → ${seg.end} → ${hlName}`);
 
-    try {
-      await spawnAsync(config.paths.ffmpeg, [
-        '-y', '-loglevel', 'error', '-ss', seg.start, '-to', seg.end,
-        '-i', actualSource, '-c', 'copy', '-avoid_negative_ts', 'make_zero',
-        '-movflags', '+faststart', hlPath,
-      ], { prefix: `[cut ${i + 1}]`, cwd: outputDir, onProc: (p) => { currentProc = p; } });
-    } catch (err) {
-      console.error(`${ts()} ❌ Cut failed [${i + 1}]: ${err.message}`);
-      continue;
+      try {
+        await spawnAsync(config.paths.ffmpeg, [
+          '-y', '-loglevel', 'error', '-ss', seg.start, '-to', seg.end,
+          '-i', actualSource, '-c', 'copy', '-avoid_negative_ts', 'make_zero',
+          '-movflags', '+faststart', hlPath,
+        ], { prefix: `[cut ${i + 1}]`, cwd: outputDir, onProc: (p) => { currentProc = p; } });
+      } catch (err) {
+        console.error(`${ts()} ❌ Cut failed [${i + 1}]: ${err.message}`);
+        continue;
+      }
+      currentProc = null;
+      if (existsSync(hlPath)) highlightFiles.push(hlPath);
     }
-    currentProc = null;
-    if (existsSync(hlPath)) highlightFiles.push(hlPath);
-  }
 
-  console.log(`${ts()} ✅ Cut: ${highlightFiles.length}/${totalSegments}`);
-  if (highlightFiles.length === 0) throw new Error('No highlights produced.');
+    console.log(`${ts()} ✅ Cut: ${highlightFiles.length}/${totalSegments}`);
+    if (highlightFiles.length === 0) throw new Error('No highlights produced.');
+    filesToUpload = highlightFiles;
+  }
 
   // ═══════════════════════════════════════════════════════════════════════
   // STEP 2: UPLOAD
   // ═══════════════════════════════════════════════════════════════════════
   await assertNotCancelled();
   let totalSize = 0;
-  for (const fp of highlightFiles) totalSize += (await stat(fp)).size;
+  for (const fp of filesToUpload) totalSize += (await stat(fp)).size;
   const totalSizeMB = totalSize / (1024 * 1024);
   const maxEmailMB = config.settings?.maxFileSizeForEmailMB || 25;
   console.log(`${ts()} 📊 Total: ${totalSizeMB.toFixed(1)} MB`);
@@ -294,14 +401,14 @@ export async function processRequest(request, requestId, config, db, checkCancel
   let driveLinks = [], resultLinks = [], driveUploadOk = false;
 
   if (config.google_drive?.folderId && (config.google_drive?.clientId || config.google_drive?.serviceAccountPath)) {
-    console.log(`${ts()} ☁️  Uploading ${highlightFiles.length} file(s) to Drive...`);
-    await pw.write({ step: 'uploading', step_num: 2, total_steps: 3, percent: 0 });
+    console.log(`${ts()} ☁️  Uploading ${filesToUpload.length} file(s) to Drive...`);
+    await pw.write({ step: 'uploading', step_num: 2, total_steps: totalSteps, percent: 0 });
 
-    for (let i = 0; i < highlightFiles.length; i++) {
+    for (let i = 0; i < filesToUpload.length; i++) {
       await assertNotCancelled();
-      const fp = highlightFiles[i], fn = path.basename(fp);
+      const fp = filesToUpload[i], fn = path.basename(fp);
       try {
-        await pw.write({ step: 'uploading', step_num: 2, total_steps: 3, percent: Math.round((i / highlightFiles.length) * 100), current_file: fn });
+        await pw.write({ step: 'uploading', step_num: 2, total_steps: totalSteps, percent: Math.round((i / filesToUpload.length) * 100), current_file: fn });
         const { webViewLink } = await uploadToGoogleDrive(config, fp, fn);
         driveLinks.push({ name: fn, link: webViewLink }); resultLinks.push(webViewLink);
       } catch (err) {
@@ -310,33 +417,37 @@ export async function processRequest(request, requestId, config, db, checkCancel
       }
     }
     driveUploadOk = driveLinks.some(d => d.link && !d.link.startsWith('('));
-    await pw.write({ step: 'uploading', step_num: 2, total_steps: 3, percent: 100 });
+    await pw.write({ step: 'uploading', step_num: 2, total_steps: totalSteps, percent: 100 });
   } else {
-    await pw.write({ step: 'uploading', step_num: 2, total_steps: 3, percent: 100, current_file: 'skipped' });
+    await pw.write({ step: 'uploading', step_num: 2, total_steps: totalSteps, percent: 100, current_file: 'skipped' });
   }
-  if (!driveUploadOk) for (const fp of highlightFiles) resultLinks.push(`file://${fp}`);
+  if (!driveUploadOk) for (const fp of filesToUpload) resultLinks.push(`file://${fp}`);
 
   // ═══════════════════════════════════════════════════════════════════════
   // STEP 3: EMAIL
   // ═══════════════════════════════════════════════════════════════════════
   await assertNotCancelled();
   if (request.email) {
-    await pw.write({ step: 'emailing', step_num: 3, total_steps: 3, percent: 0, current_file: request.email });
+    await pw.write({ step: 'emailing', step_num: totalSteps, total_steps: totalSteps, percent: 0, current_file: request.email });
     try {
-      if (driveUploadOk) await sendResultEmail(config, request, highlightFiles, driveLinks);
-      else await sendResultEmail(config, request, highlightFiles, null);
-      await pw.write({ step: 'emailing', step_num: 3, total_steps: 3, percent: 100 });
+      if (driveUploadOk) await sendResultEmail(config, request, filesToUpload, driveLinks);
+      else await sendResultEmail(config, request, filesToUpload, null);
+      await pw.write({ step: 'emailing', step_num: totalSteps, total_steps: totalSteps, percent: 100 });
       console.log(`${ts()} ✅ Email → ${request.email}`);
     } catch (err) { throw new Error(`Email failed: ${err.message}`); }
   } else {
-    await pw.write({ step: 'emailing', step_num: 3, total_steps: 3, percent: 100, current_file: 'skipped' });
+    await pw.write({ step: 'emailing', step_num: totalSteps, total_steps: totalSteps, percent: 100, current_file: 'skipped' });
   }
 
   // ═══════════════════════════════════════════════════════════════════════
   // CLEANUP: Xoá highlights ngay, giữ source 12h
   // ═══════════════════════════════════════════════════════════════════════
-  console.log(`${ts()} 🗑️ Xoá highlights (đã gửi xong)...`);
-  try { await rm(outputDir, { recursive: true, force: true }); } catch (e) {}
+  if (!isFullDownload) {
+    console.log(`${ts()} 🗑️ Xoá highlights (đã gửi xong)...`);
+    try { await rm(outputDir, { recursive: true, force: true }); } catch (e) {}
+  } else {
+    console.log(`${ts()} 💾 Full download — giữ source, không xoá`);
+  }
 
   // Source giữ lại — cleanup job sẽ xoá sau 12h
 
@@ -344,8 +455,10 @@ export async function processRequest(request, requestId, config, db, checkCancel
 
   return {
     resultLinks,
-    highlightCount: highlightFiles.length,
+    highlightCount: filesToUpload.length,
     totalSizeMB: parseFloat(totalSizeMB.toFixed(2)),
+    isFullDownload,
+    isLive: isLiveUrl,
     sourceInfo: {
       url: request.url,
       hash: urlHash,

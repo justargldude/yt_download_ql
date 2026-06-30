@@ -16,7 +16,8 @@ export function startCleanupJob(config, db) {
 
   console.log(`${ts()} 🧹 Cleanup job started — interval: ${intervalMs / 60000}min, source retention: ${sourceMaxHours}h`);
 
-  runCleanup(outputDir, sourceMaxHours, db);
+  // Delay lần chạy đầu tiên 30s để tránh race với recovery
+  setTimeout(() => runCleanup(outputDir, sourceMaxHours, db), 30000);
   const timer = setInterval(() => runCleanup(outputDir, sourceMaxHours, db), intervalMs);
   timer.unref();
   return timer;
@@ -29,10 +30,41 @@ async function runCleanup(outputDir, sourceMaxHours, db) {
     let cleaned = 0;
     const now = Date.now();
 
-    // ── 1. Clean request folders (req_xxx) — xoá sau 1h ──
+    // Lấy danh sách request đang active từ Firebase để không xóa nhầm
+    let activeRequestIds = new Set();
+    let activeSourceHashes = new Set();
+    try {
+      const snap = await db.ref('requests').once('value');
+      const allReqs = snap.val() || {};
+      for (const [id, req] of Object.entries(allReqs)) {
+        if (['pending', 'processing'].includes(req.status)) {
+          activeRequestIds.add(id);
+          // Lưu source hash của request đang active
+          if (req.url) {
+            try {
+              const u = new URL(req.url);
+              u.searchParams.delete('si');
+              u.searchParams.delete('t');
+              u.searchParams.delete('feature');
+              const videoId = u.searchParams.get('v') || u.pathname.split('/').pop();
+              const clean = `youtube:${videoId}`;
+              const hash = (await import('crypto')).createHash('md5').update(clean).digest('hex').slice(0, 12);
+              activeSourceHashes.add(hash);
+            } catch (e) { /* ignore */ }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`${ts()} ⚠️ Cleanup: could not fetch active requests, skipping this round`);
+      return;
+    }
+
+    // ── 1. Clean request folders (req_xxx) — xóa sau 1h, skip active ──
     const entries = await readdir(outputDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name === 'sources') continue;
+      // Skip nếu request đang active
+      if (activeRequestIds.has(entry.name)) continue;
       const dirPath = path.join(outputDir, entry.name);
       try {
         const info = await stat(dirPath);
@@ -69,6 +101,10 @@ async function runCleanup(outputDir, sourceMaxHours, db) {
 
           const ageH = (now - downloadedAt) / 3600000;
           if (ageH > sourceMaxHours) {
+            // Skip nếu source đang được dùng bởi request active
+            if (activeSourceHashes.has(entry.name)) {
+              continue;
+            }
             // Get metadata for logging
             let url = entry.name;
             try {
