@@ -7,6 +7,10 @@ import { readFile, writeFile } from 'fs/promises';
 import { createServer } from 'http';
 import { URL } from 'url';
 import { existsSync } from 'fs';
+import dns from 'dns';
+
+// Fix IPv6 timeout on Linux
+dns.setDefaultResultOrder('ipv4first');
 
 const CONFIG_FILE = './config.json';
 const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
@@ -137,7 +141,7 @@ async function main() {
   console.log('═══════════════════════════════════════════════════');
   console.log('  ✅ ĐÃ LƯU refresh token vào config.json!');
   console.log('  ☁️  Google Drive upload sẽ dùng quota Google One của bạn');
-  console.log('  🔄 Restart agent để áp dụng: chạy start.bat');
+  console.log('  🔄 Restart agent để áp dụng: systemctl --user restart yt-queue-agent');
   console.log('═══════════════════════════════════════════════════');
   console.log('');
 
