@@ -53,20 +53,8 @@ if (urlInput) {
     const url = urlInput.value.trim();
     if (isLiveUrl(url)) {
       if (liveBadge) liveBadge.style.display = '';
-      if (fullDownloadCheckbox && !fullDownloadCheckbox.checked) {
-        fullDownloadCheckbox.checked = true;
-        fullDownloadCheckbox.dispatchEvent(new Event('change'));
-      }
     } else {
       if (liveBadge) liveBadge.style.display = 'none';
-    }
-  });
-}
-
-if (fullDownloadCheckbox) {
-  fullDownloadCheckbox.addEventListener('change', () => {
-    if (segmentsField) {
-      segmentsField.classList.toggle('field-segments-hidden', fullDownloadCheckbox.checked);
     }
   });
 }
@@ -161,7 +149,7 @@ function dismissToast(toast) {
 function setLoading(loading) {
   submitBtn.disabled = loading;
   submitBtn.classList.toggle('loading', loading);
-  [urlInput, segmentsInput, emailInput, nameInput, sourceSelect, fullDownloadCheckbox].forEach(el => { if (el) el.disabled = loading; });
+  [urlInput, segmentsInput, emailInput, nameInput, sourceSelect].forEach(el => { if (el) el.disabled = loading; });
 }
 
 form.addEventListener('submit', async (e) => {
@@ -182,19 +170,15 @@ form.addEventListener('submit', async (e) => {
   if (!email) { setError('email-error', 'Vui lòng nhập email.'); valid = false; }
   else if (!isValidEmail(email)) { setError('email-error', 'Email không hợp lệ.'); valid = false; }
 
-  const isFullDownload = fullDownloadCheckbox?.checked || false;
   const { segments, errors } = parseSegments(rawSegments);
-  if (!isFullDownload) {
-    if (errors.length > 0) {
-      setError('segments-error', errors.join('; '));
-      flashField('field-segments', false);
-      valid = false;
-    } else if (segments.length === 0) {
-      setError('segments-error', 'Cần ít nhất 1 đoạn thời gian.');
-      valid = false;
-    } else {
-      flashField('field-segments', true);
-    }
+  const isFullDownload = segments.length === 0 && errors.length === 0;
+  // Chỉ báo lỗi nếu có nhập segments nhưng sai format
+  if (errors.length > 0) {
+    setError('segments-error', errors.join('; '));
+    flashField('field-segments', false);
+    valid = false;
+  } else if (segments.length > 0) {
+    flashField('field-segments', true);
   }
 
   if (!valid) return;

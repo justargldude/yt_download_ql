@@ -47,21 +47,13 @@
         <div class="field" id="field-url">
           <label for="yt-url">Link YouTube</label>
           <input type="url" id="yt-url" placeholder="https://www.youtube.com/watch?v=..." />
+          <span class="live-badge" id="live-badge" style="display:none">🔴 LIVE</span>
           <span class="field-error" id="url-error"></span>
         </div>
 
-        <div class="field field-toggle" id="field-fulldownload">
-          <label class="toggle-label">
-            <input type="checkbox" id="full-download" />
-            <span class="toggle-switch"></span>
-            <span class="toggle-text">Tải full video <small>(không cắt)</small></span>
-          </label>
-          <span class="live-badge" id="live-badge" style="display:none">🔴 LIVE</span>
-        </div>
-
         <div class="field" id="field-segments">
-          <label for="segments">Đoạn cần cắt <small>(mỗi dòng 1 đoạn)</small></label>
-          <textarea id="segments" rows="4" placeholder="27:00 - 27:35&#10;1:00:45 - 1:01:40&#10;4:35:50 - 4:36:50" required></textarea>
+          <label for="segments">Đoạn cần cắt <small>(tuỳ chọn — bỏ trống để tải full video)</small></label>
+          <textarea id="segments" rows="4" placeholder="Bỏ trống = tải full video&#10;27:00 - 27:35&#10;1:00:45 - 1:01:40"></textarea>
           <div class="field-hint">Định dạng: <code>mm:ss</code> hoặc <code>h:mm:ss</code> — Ngăn cách bằng <code>-</code> <code>~</code> <code>→</code></div>
           <span class="field-error" id="segments-error"></span>
         </div>
