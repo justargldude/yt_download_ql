@@ -220,6 +220,7 @@ export async function processRequest(request, requestId, config, db, checkCancel
       console.log(`${ts()} ════════════════════════════════════════`);
 
       const dlArgs = [
+        '--force-ipv4',
         '--concurrent-fragments', String(config.settings?.concurrentFragments || 16),
         '--retries', '10', '--fragment-retries', '10',
         '--user-agent', UA,

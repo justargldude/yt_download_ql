@@ -14,7 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ── SPAWN HELPER ────────────────────────────────────────────────────────
 function runCommand(cmd, args, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, {});
+    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     proc.stdout?.on('data', c => { stdout += c.toString(); });
     proc.stderr?.on('data', c => { stderr += c.toString(); });
@@ -48,6 +48,7 @@ export async function checkYouTubeCookies(config) {
     console.log(`${ts()}    📄 Cookies file: ${cookiesFile}`);
     try {
       const result = await runCommand(ytdlp, [
+        '--force-ipv4',
         '--cookies', cookiesFile,
         '--skip-download', '--no-warnings', '-j',
         TEST_URL,
@@ -76,6 +77,7 @@ export async function checkYouTubeCookies(config) {
   console.log(`${ts()}    🔄 Thử lấy cookies từ Chrome...`);
   try {
     const result = await runCommand(ytdlp, [
+      '--force-ipv4',
       '--cookies-from-browser', 'chrome',
       '--skip-download', '--no-warnings', '-j',
       TEST_URL,
