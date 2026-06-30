@@ -225,7 +225,7 @@ export async function processRequest(request, requestId, config, db, checkCancel
 
       const dlArgs = [
         '--force-ipv4',
-        '--js-runtimes', 'node',
+        '--js-runtimes', 'quickjs,deno',
         '--concurrent-fragments', String(config.settings?.concurrentFragments || 16),
         '--retries', '10', '--fragment-retries', '10',
         '--user-agent', UA,

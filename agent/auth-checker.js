@@ -49,7 +49,7 @@ export async function checkYouTubeCookies(config) {
     try {
       const result = await runCommand(ytdlp, [
         '--force-ipv4',
-        '--js-runtimes', 'node',
+        '--js-runtimes', 'quickjs,deno',
         '--cookies', cookiesFile,
         '--skip-download', '--no-warnings', '-j',
         TEST_URL,
@@ -79,7 +79,7 @@ export async function checkYouTubeCookies(config) {
   try {
     const result = await runCommand(ytdlp, [
       '--force-ipv4',
-      '--js-runtimes', 'node',
+      '--js-runtimes', 'quickjs,deno',
       '--cookies-from-browser', 'chrome',
       '--skip-download', '--no-warnings', '-j',
       TEST_URL,
@@ -121,7 +121,7 @@ async function exportCookiesFromBrowser(ytdlp, cookiesFile) {
     // Cách này dùng flag --cookies để ghi cookies (yt-dlp 2023.07+)
     const result = await runCommand(ytdlp, [
       '--force-ipv4',
-      '--js-runtimes', 'node',
+      '--js-runtimes', 'quickjs,deno',
       '--cookies-from-browser', 'chrome',
       '--cookies', cookiesFile,
       '--skip-download', '--no-warnings',
