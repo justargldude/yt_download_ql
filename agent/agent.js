@@ -52,7 +52,9 @@ let currentRequestId = null;
 let dlibUploadServer = null;
 let isPolling = false;                    // mutex: ngăn nhiều poll chạy đồng thời
 const processingSet = new Set();          // track requestId đang xử lý → skip duplicate
+const processingUrls = new Map();         // track URL đang xử lý → skip duplicate URL
 let shutdownResolve = null;               // resolve khi drain xong
+const MAX_RETRY_COUNT = 3;                // số lần retry tối đa trước khi đánh dấu error
 
 // ── WAIT FOR NETWORK (boot-time DNS retry) ──────────────────────────────
 async function waitForNetwork(maxRetries = 10, delayMs = 5000) {
@@ -160,15 +162,27 @@ async function recoverInterruptedRequests() {
 
     for (const [requestId, request] of Object.entries(requests)) {
       if (request.status === 'processing') {
-        console.log(`${ts()} 🔄 Resetting interrupted request: ${requestId} (processing -> pending)`);
-        await db.ref(`requests/${requestId}`).update({
-          status: 'pending',
-          progress: null,
-          processing_started_at: null,
-        });
+        const retryCount = (request.retry_count || 0) + 1;
+        if (retryCount >= MAX_RETRY_COUNT) {
+          console.log(`${ts()} ❌ Request ${requestId} exceeded max retries (${MAX_RETRY_COUNT}) → marking as error`);
+          await db.ref(`requests/${requestId}`).update({
+            status: 'error',
+            error_message: `Đã thử ${retryCount} lần nhưng vẫn thất bại. Vui lòng thử lại với link khác.`,
+            failed_at: new Date().toISOString(),
+            retry_count: retryCount,
+          });
+        } else {
+          console.log(`${ts()} 🔄 Resetting interrupted request: ${requestId} (processing → pending, retry ${retryCount}/${MAX_RETRY_COUNT})`);
+          await db.ref(`requests/${requestId}`).update({
+            status: 'pending',
+            progress: null,
+            processing_started_at: null,
+            retry_count: retryCount,
+          });
+        }
         recoveredCount++;
       } else if (request.status === 'cancelling') {
-        console.log(`${ts()} 🔄 Resetting stuck cancelling request: ${requestId} (cancelling -> cancelled)`);
+        console.log(`${ts()} 🔄 Resetting stuck cancelling request: ${requestId} (cancelling → cancelled)`);
         await db.ref(`requests/${requestId}`).update({
           status: 'cancelled',
           cancelled_at: new Date().toISOString(),
@@ -287,7 +301,24 @@ async function pollForRequests() {
 async function handleSingleRequest(requestId, request) {
   // Guard: skip nếu request đã đang xử lý
   if (processingSet.has(requestId)) return;
+
+  // Guard: skip nếu URL này đã đang được xử lý bởi request khác
+  const normalizedUrl = normalizeUrlForDedup(request.url);
+  if (normalizedUrl && processingUrls.has(normalizedUrl)) {
+    const existingReqId = processingUrls.get(normalizedUrl);
+    console.log(`${ts()} ⚠️ Duplicate URL detected! ${requestId} has same URL as ${existingReqId} (đang xử lý) → skip & mark duplicate`);
+    try {
+      await db.ref(`requests/${requestId}`).update({
+        status: 'error',
+        error_message: `Link này đang được tải bởi request ${existingReqId}. Vui lòng chờ hoặc dùng link khác.`,
+        failed_at: new Date().toISOString(),
+      });
+    } catch (e) {}
+    return;
+  }
+
   processingSet.add(requestId);
+  if (normalizedUrl) processingUrls.set(normalizedUrl, requestId);
 
   const reqRef = db.ref(`requests/${requestId}`);
   const name = request.name || 'Unknown';
@@ -398,6 +429,7 @@ async function handleSingleRequest(requestId, request) {
     processingCount--;
     currentRequestId = null;
     processingSet.delete(requestId);
+    if (normalizedUrl) processingUrls.delete(normalizedUrl);
   }
 }
 
@@ -406,6 +438,27 @@ async function stopDlibUploadServer() {
   const server = dlibUploadServer;
   dlibUploadServer = null;
   await new Promise((resolve) => server.close(resolve));
+}
+
+// ── NORMALIZE URL FOR DEDUP ─────────────────────────────────────────────
+function normalizeUrlForDedup(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    // YouTube: chỉ cần videoId
+    if (u.hostname.includes('youtube.com') || u.hostname.includes('youtu.be')) {
+      let videoId;
+      if (u.hostname.includes('youtu.be')) {
+        videoId = u.pathname.slice(1);
+      } else {
+        videoId = u.searchParams.get('v') || u.pathname.split('/').pop();
+      }
+      return videoId ? `yt:${videoId}` : url;
+    }
+    return url;
+  } catch {
+    return url;
+  }
 }
 
 // ── GRACEFUL SHUTDOWN ───────────────────────────────────────────────────

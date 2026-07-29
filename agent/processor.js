@@ -16,6 +16,16 @@ import { uploadToGoogleDrive } from './uploader.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
+// Augment PATH so yt-dlp's Python subprocess can find deno/quickjs
+const EXTRA_PATH_DIRS = [
+  path.join(process.env.HOME || '', '.deno', 'bin'),
+  path.join(process.env.HOME || '', 'bin'),
+];
+const AUGMENTED_ENV = {
+  ...process.env,
+  PATH: [...EXTRA_PATH_DIRS, process.env.PATH || ''].join(':'),
+};
+
 // Download lock per URL hash — chỉ tải 1 lần dù nhiều request cùng URL
 const downloadLocks = new Map();  // urlHash → Promise<void>
 
@@ -85,9 +95,9 @@ function parseProgressLine(line) {
 }
 
 // ── SPAWN ───────────────────────────────────────────────────────────────
-function spawnAsync(cmd, args, { prefix = '', cwd, onLine, onProc } = {}) {
+function spawnAsync(cmd, args, { prefix = '', cwd, onLine, onProc, env } = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { cwd, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(cmd, args, { cwd, env: env || AUGMENTED_ENV, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let stderrBuf = '';
     if (onProc) onProc(proc);
     const handle = (chunk) => {
@@ -214,6 +224,9 @@ export async function processRequest(request, requestId, config, db, checkCancel
   async function doDownload() {
     let lockResolve, lockReject;
     const lockPromise = new Promise((res, rej) => { lockResolve = res; lockReject = rej; });
+    // Prevent unhandled promise rejection when lockReject() is called
+    // but no one is currently awaiting the promise
+    lockPromise.catch(() => {});
     downloadLocks.set(urlHash, lockPromise);
 
     try {
@@ -225,7 +238,7 @@ export async function processRequest(request, requestId, config, db, checkCancel
 
       const dlArgs = [
         '--force-ipv4',
-        '--js-runtimes', 'quickjs,deno',
+        '--js-runtimes', 'deno', '--js-runtimes', 'quickjs',
         '--concurrent-fragments', String(config.settings?.concurrentFragments || 16),
         '--retries', '10', '--fragment-retries', '10',
         '--user-agent', UA,
@@ -255,9 +268,14 @@ export async function processRequest(request, requestId, config, db, checkCancel
       }
       dlArgs.push(request.url);
 
+      let dlCancelled = false;
+      let lastProgressTime = Date.now();
+      const STALL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes without real progress → abort
+
       const onDlLine = (line) => {
         const prog = parseProgressLine(line);
         if (prog) {
+          lastProgressTime = Date.now(); // stall tracker
           pw.write({
             step: 'downloading', step_num: 1, total_steps: isFullDownload ? 2 : 3,
             percent: Math.round(prog.percent || 0),
@@ -274,6 +292,7 @@ export async function processRequest(request, requestId, config, db, checkCancel
         if (isLiveUrl && !prog) {
           const fragMatch = line.match(/frag\s*(\d+)/i);
           if (fragMatch) {
+            lastProgressTime = Date.now(); // stall tracker
             pw.write({
               step: 'downloading', step_num: 1, total_steps: isFullDownload ? 2 : 3,
               percent: 0,
@@ -283,11 +302,20 @@ export async function processRequest(request, requestId, config, db, checkCancel
             });
           }
         }
+        // Also count any percentage line as progress
+        if (/\d+\.\d+%/.test(line)) lastProgressTime = Date.now();
       };
 
-      let dlCancelled = false;
       const cancelCheck = setInterval(async () => {
-        try { if (await checkCancelled()) { dlCancelled = true; if (currentProc) killProcessTree(currentProc); } } catch (e) {}
+        try {
+          if (await checkCancelled()) { dlCancelled = true; if (currentProc) killProcessTree(currentProc); return; }
+          // Stall detection: no progress for too long
+          if (Date.now() - lastProgressTime > STALL_TIMEOUT_MS) {
+            console.log(`${ts()} ⏰ Download stalled for ${STALL_TIMEOUT_MS / 60000} minutes — aborting`);
+            dlCancelled = true;
+            if (currentProc) killProcessTree(currentProc);
+          }
+        } catch (e) {}
       }, 3000);
 
       try {
@@ -297,9 +325,11 @@ export async function processRequest(request, requestId, config, db, checkCancel
         });
       } catch (err) {
         if (dlCancelled || await checkCancelled()) { clearInterval(cancelCheck); lockReject(err); throw new Error('CANCELLED'); }
-        // Retry without aria2c
+        // Retry without aria2c — xóa file partial trước để tránh HTTP 416
         if (useAria2c) {
           console.log(`${ts()} ⚠️ aria2c failed, retrying native...`);
+          // Xóa file partial/incomplete để tránh resume lỗi HTTP 416
+          await cleanPartialFiles(sourceDir);
           const retry = [];
           for (let j = 0; j < dlArgs.length; j++) {
             if (dlArgs[j] === '--downloader' || dlArgs[j] === '--downloader-args') {
@@ -308,10 +338,16 @@ export async function processRequest(request, requestId, config, db, checkCancel
             }
             retry.push(dlArgs[j]);
           }
+          // Thêm --no-continue để force tải lại từ đầu
+          retry.push('--no-continue');
           await assertNotCancelled();
           try { await spawnAsync(config.paths.ytdlp, retry, { prefix: '[retry]', cwd: sourceDir, onLine: onDlLine, onProc: (p) => { currentProc = p; } }); }
           catch (e2) { if (dlCancelled || await checkCancelled()) { clearInterval(cancelCheck); lockReject(e2); throw new Error('CANCELLED'); } lockReject(e2); throw e2; }
-        } else { lockReject(err); throw err; }
+        } else {
+          // Xóa file partial/incomplete trước khi throw
+          await cleanPartialFiles(sourceDir);
+          lockReject(err); throw err;
+        }
       } finally { clearInterval(cancelCheck); }
       currentProc = null;
 
@@ -478,4 +514,21 @@ export async function processRequest(request, requestId, config, db, checkCancel
 async function readFileText(p) {
   const { readFile } = await import('fs/promises');
   return readFile(p, 'utf-8');
+}
+
+// Helper: xóa file partial/incomplete trong sourceDir để tránh HTTP 416 khi retry
+async function cleanPartialFiles(dir) {
+  try {
+    const files = await readdir(dir);
+    for (const f of files) {
+      // Xóa file .part, .temp, .f*.mp4, .f*.webm (partial fragments) nhưng giữ source.mp4 hoàn chỉnh
+      if (f.endsWith('.part') || f.endsWith('.temp.mp4') || /\.f\d+\./.test(f) || f === 'source.temp.mp4') {
+        const fp = path.join(dir, f);
+        console.log(`${ts()} 🗑️  Removing partial file: ${f}`);
+        try { await unlink(fp); } catch (e) {}
+      }
+    }
+  } catch (e) {
+    console.warn(`${ts()} ⚠️ cleanPartialFiles error: ${e.message}`);
+  }
 }

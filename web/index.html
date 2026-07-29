@@ -61,7 +61,20 @@
         <div class="field-row">
           <div class="field" id="field-email">
             <label for="email">Email nhận kết quả</label>
-            <input type="email" id="email" placeholder="you@email.com" required />
+            <div class="email-input-wrap">
+              <input type="email" id="email" list="saved-emails" placeholder="you@email.com" required autocomplete="off" />
+              <datalist id="saved-emails"></datalist>
+              <button type="button" id="manage-emails-btn" class="btn-manage-emails" title="Quản lý email đã lưu" style="display:none">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              </button>
+            </div>
+            <div class="saved-emails-panel" id="saved-emails-panel" style="display:none">
+              <div class="saved-emails-header">
+                <span>Email đã lưu</span>
+                <button type="button" id="close-emails-panel" class="btn-close-panel">✕</button>
+              </div>
+              <div id="saved-emails-list" class="saved-emails-list"></div>
+            </div>
             <span class="field-error" id="email-error"></span>
           </div>
           <div class="field" id="field-name">
@@ -80,10 +93,21 @@
 
       <section class="card status-card" id="status-section">
         <div class="card-header">
-          <h2>Lịch sử yêu cầu</h2>
-          <button type="button" class="btn-clear" id="clear-history-btn" title="Xoá lịch sử">
-            Xoá
-          </button>
+          <h2>Lịch sử & Video cần cắt</h2>
+          <div class="header-actions">
+            <button type="button" class="btn-sync" id="sync-history-btn" title="Tải tất cả lịch sử từ Firebase">
+              🔄 Đồng bộ
+            </button>
+            <button type="button" class="btn-clear" id="clear-history-btn" title="Xoá lịch sử màn hình">
+              Xoá
+            </button>
+          </div>
+        </div>
+        <div class="history-filter-bar" id="filter-bar">
+          <button type="button" class="filter-tab active" data-filter="all">Tất cả</button>
+          <button type="button" class="filter-tab" data-filter="processing">⚡ Đang cắt</button>
+          <button type="button" class="filter-tab" data-filter="error">⚠️ Lỗi / Cần cắt lại</button>
+          <button type="button" class="filter-tab" data-filter="done">✅ Hoàn thành</button>
         </div>
         <div id="status-list" class="status-list">
           <p class="empty-state" id="empty-state">Chưa có yêu cầu nào.</p>

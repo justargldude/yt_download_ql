@@ -11,10 +11,20 @@ import { ts } from './agent.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Augment PATH so yt-dlp's Python subprocess can find deno/quickjs
+const AUGMENTED_ENV = {
+  ...process.env,
+  PATH: [
+    path.join(process.env.HOME || '', '.deno', 'bin'),
+    path.join(process.env.HOME || '', 'bin'),
+    process.env.PATH || '',
+  ].join(':'),
+};
+
 // ── SPAWN HELPER ────────────────────────────────────────────────────────
 function runCommand(cmd, args, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(cmd, args, { env: AUGMENTED_ENV, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     proc.stdout?.on('data', c => { stdout += c.toString(); });
     proc.stderr?.on('data', c => { stderr += c.toString(); });
@@ -49,7 +59,7 @@ export async function checkYouTubeCookies(config) {
     try {
       const result = await runCommand(ytdlp, [
         '--force-ipv4',
-        '--js-runtimes', 'quickjs,deno',
+        '--js-runtimes', 'deno', '--js-runtimes', 'quickjs',
         '--cookies', cookiesFile,
         '--skip-download', '--no-warnings', '-j',
         TEST_URL,
@@ -79,7 +89,7 @@ export async function checkYouTubeCookies(config) {
   try {
     const result = await runCommand(ytdlp, [
       '--force-ipv4',
-      '--js-runtimes', 'quickjs,deno',
+      '--js-runtimes', 'deno', '--js-runtimes', 'quickjs',
       '--cookies-from-browser', 'chrome',
       '--skip-download', '--no-warnings', '-j',
       TEST_URL,
@@ -121,7 +131,7 @@ async function exportCookiesFromBrowser(ytdlp, cookiesFile) {
     // Cách này dùng flag --cookies để ghi cookies (yt-dlp 2023.07+)
     const result = await runCommand(ytdlp, [
       '--force-ipv4',
-      '--js-runtimes', 'quickjs,deno',
+      '--js-runtimes', 'deno', '--js-runtimes', 'quickjs',
       '--cookies-from-browser', 'chrome',
       '--cookies', cookiesFile,
       '--skip-download', '--no-warnings',

@@ -48,6 +48,20 @@ function isLiveUrl(url) {
   return /\/live\//i.test(url) || /[?&]live=/i.test(url);
 }
 
+// Normalize YouTube URL → video ID for dedup
+function extractYouTubeVideoId(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes('youtu.be')) {
+      return u.pathname.slice(1).split('/')[0];
+    }
+    if (u.hostname.includes('youtube.com')) {
+      return u.searchParams.get('v') || u.pathname.split('/').pop();
+    }
+  } catch {}
+  return null;
+}
+
 if (urlInput) {
   urlInput.addEventListener('input', () => {
     const url = urlInput.value.trim();
@@ -61,7 +75,95 @@ if (urlInput) {
 
 // ── Local Storage ──────────────────────────
 const STORAGE_KEY = 'yt_cut_requests';
+const EMAILS_STORAGE_KEY = 'yt_cut_saved_emails';
 const requestDataMap = new Map();
+
+// ═══════════════════════════════════════════
+//  SAVED EMAILS
+// ═══════════════════════════════════════════
+
+function getSavedEmails() {
+  try {
+    return JSON.parse(localStorage.getItem(EMAILS_STORAGE_KEY)) || [];
+  } catch { return []; }
+}
+
+function saveEmail(email) {
+  if (!email) return;
+  let emails = getSavedEmails();
+  // Move to front if already exists, otherwise prepend
+  emails = emails.filter(e => e !== email);
+  emails.unshift(email);
+  // Keep max 10
+  if (emails.length > 10) emails = emails.slice(0, 10);
+  localStorage.setItem(EMAILS_STORAGE_KEY, JSON.stringify(emails));
+  refreshEmailUI();
+}
+
+function removeEmail(email) {
+  let emails = getSavedEmails().filter(e => e !== email);
+  localStorage.setItem(EMAILS_STORAGE_KEY, JSON.stringify(emails));
+  refreshEmailUI();
+}
+
+function refreshEmailUI() {
+  const emails = getSavedEmails();
+  // Refresh datalist
+  const datalist = document.getElementById('saved-emails');
+  if (datalist) {
+    datalist.innerHTML = emails.map(e => `<option value="${e}"></option>`).join('');
+  }
+  // Show/hide manage button
+  const manageBtn = document.getElementById('manage-emails-btn');
+  if (manageBtn) manageBtn.style.display = emails.length > 0 ? '' : 'none';
+  // Refresh panel list
+  renderSavedEmailsList();
+}
+
+function renderSavedEmailsList() {
+  const listEl = document.getElementById('saved-emails-list');
+  if (!listEl) return;
+  const emails = getSavedEmails();
+  if (emails.length === 0) {
+    listEl.innerHTML = '<p style="color:var(--text-muted);font-size:0.8rem;padding:8px 0">Chưa có email nào được lưu.</p>';
+    return;
+  }
+  listEl.innerHTML = emails.map(e => `
+    <div class="saved-email-item">
+      <span class="saved-email-addr">${escapeHtml(e)}</span>
+      <button type="button" class="btn-remove-email" data-email="${escapeHtml(e)}" title="Xoá">✕</button>
+    </div>
+  `).join('');
+  // Attach remove handlers
+  listEl.querySelectorAll('.btn-remove-email').forEach(btn => {
+    btn.addEventListener('click', () => {
+      removeEmail(btn.dataset.email);
+      showToast('Đã xoá email khỏi danh sách.', 'info');
+    });
+  });
+}
+
+// Init saved emails on load
+(function initSavedEmails() {
+  refreshEmailUI();
+  const emails = getSavedEmails();
+  if (emails.length > 0 && emailInput) {
+    emailInput.value = emails[0]; // Auto-fill most recent
+  }
+  // Manage panel toggle
+  const manageBtn = document.getElementById('manage-emails-btn');
+  const panel = document.getElementById('saved-emails-panel');
+  const closeBtn = document.getElementById('close-emails-panel');
+  if (manageBtn && panel) {
+    manageBtn.addEventListener('click', () => {
+      panel.style.display = panel.style.display === 'none' ? '' : 'none';
+      renderSavedEmailsList();
+    });
+  }
+  if (closeBtn && panel) {
+    closeBtn.addEventListener('click', () => { panel.style.display = 'none'; });
+  }
+})();
 
 // ═══════════════════════════════════════════
 //  TIME NORMALIZATION
@@ -187,6 +289,31 @@ form.addEventListener('submit', async (e) => {
   const finalUrl = url || (sourceSelect?.selectedOptions[0]?.dataset?.url || '');
 
   setLoading(true);
+
+  // ── Duplicate URL check: kiểm tra xem có request pending/processing cùng URL không ──
+  const videoId = extractYouTubeVideoId(finalUrl);
+  try {
+    const snapshot = await db.ref('requests').once('value');
+    const allRequests = snapshot.val();
+    if (allRequests && videoId) {
+      for (const [existingId, req] of Object.entries(allRequests)) {
+        if (req.status !== 'pending' && req.status !== 'processing') continue;
+        const existingVideoId = extractYouTubeVideoId(req.url);
+        if (existingVideoId && existingVideoId === videoId) {
+          setLoading(false);
+          const confirmDup = confirm(
+            `⚠️ Link này đã có trong hàng chờ (${existingId}, trạng thái: ${req.status}).\n\nBạn có chắc muốn gửi lại không?`
+          );
+          if (!confirmDup) return;
+          setLoading(true);
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Duplicate check failed:', e.message);
+  }
+
   const requestId = 'req_' + Date.now();
   const payload = {
     url: finalUrl,
@@ -205,9 +332,12 @@ form.addEventListener('submit', async (e) => {
   try {
     await db.ref(`requests/${requestId}`).set(payload);
     saveRequestId(requestId);
+    saveEmail(email); // Lưu email vào danh sách thường dùng
     sendTelegramNotification(payload, requestId).catch(() => {});
     showToast(selectedSource ? 'Đã gửi! Cắt lại từ source cache ⚡' : 'Đã gửi yêu cầu thành công!', 'success');
     form.reset();
+    // Restore email after form.reset() clears everything
+    emailInput.value = email;
     if (sourceSelect) sourceSelect.value = '';
     renderStatusList();
     listenToRequest(requestId);
@@ -377,35 +507,228 @@ function listenToRequest(requestId) {
   });
 }
 
+// ═══════════════════════════════════════════
+//  REUSE & RETRY ACTIONS
+// ═══════════════════════════════════════════
+
+function reuseInForm(requestId) {
+  const data = requestDataMap.get(requestId);
+  if (!data) return;
+  if (urlInput) {
+    urlInput.value = data.url || '';
+    urlInput.dispatchEvent(new Event('input'));
+  }
+  if (emailInput) emailInput.value = data.email || '';
+  if (nameInput) nameInput.value = data.name || '';
+  if (segmentsInput) {
+    if (data.segments && data.segments.length > 0) {
+      segmentsInput.value = data.segments.map(s => `${s.start} - ${s.end}`).join('\n');
+    } else {
+      segmentsInput.value = '';
+    }
+  }
+  showToast('Đã điền lại thông tin video vào form!', 'info');
+  form.scrollIntoView({ behavior: 'smooth' });
+}
+window.reuseInForm = reuseInForm;
+
+async function retryRequest(requestId) {
+  const data = requestDataMap.get(requestId);
+  if (!data) return;
+
+  const newReqId = 'req_' + Date.now();
+  const payload = {
+    url: data.url,
+    segments: data.segments || [],
+    download_full: data.download_full || false,
+    email: data.email,
+    name: data.name || 'Anonymous',
+    status: 'pending',
+    source_id: data.source_id || null,
+    created_at: new Date().toISOString(),
+    processed_at: null,
+    result_links: [],
+    error_message: null
+  };
+
+  try {
+    await db.ref(`requests/${newReqId}`).set(payload);
+    saveRequestId(newReqId);
+    if (data.email) saveEmail(data.email);
+    listenToRequest(newReqId);
+    showToast('Đã gửi lại yêu cầu cắt video!', 'success');
+  } catch (err) {
+    showToast('Gửi lại thất bại: ' + err.message, 'error');
+  }
+}
+window.retryRequest = retryRequest;
+
+// ═══════════════════════════════════════════
+//  FIREBASE HISTORY SYNC BY EMAIL
+// ═══════════════════════════════════════════
+
+function syncHistoryByEmail(email) {
+  if (!email || !isValidEmail(email)) return;
+  db.ref('requests').orderByChild('email').equalTo(email).limitToLast(50).once('value', (snapshot) => {
+    const data = snapshot.val();
+    if (!data) return;
+    let count = 0;
+    Object.keys(data).forEach(id => {
+      saveRequestId(id);
+      listenToRequest(id);
+      count++;
+    });
+    if (count > 0) {
+      showToast(`Đã đồng bộ ${count} yêu cầu của ${email}`, 'info');
+      applyFilter();
+    }
+  });
+}
+window.syncHistoryByEmail = syncHistoryByEmail;
+
+// ═══════════════════════════════════════════
+//  FILTER TABS
+// ═══════════════════════════════════════════
+
+let currentFilter = 'all';
+
+function applyFilter() {
+  const items = statusList.querySelectorAll('.status-item');
+  let visibleCount = 0;
+
+  items.forEach(item => {
+    const id = item.id.replace('status-', '');
+    const data = requestDataMap.get(id);
+    if (!data) { item.style.display = 'none'; return; }
+
+    const status = data.status || 'pending';
+    let match = false;
+
+    if (currentFilter === 'all') match = true;
+    else if (currentFilter === 'processing' && (status === 'processing' || status === 'pending' || status === 'cancelling')) match = true;
+    else if (currentFilter === 'error' && status === 'error') match = true;
+    else if (currentFilter === 'done' && (status === 'done' || status === 'cancelled')) match = true;
+
+    item.style.display = match ? '' : 'none';
+    if (match) visibleCount++;
+  });
+
+  if (emptyState) {
+    emptyState.style.display = visibleCount === 0 ? '' : 'none';
+  }
+}
+
+function initFilterTabs() {
+  const filterTabs = document.querySelectorAll('.filter-tab');
+  filterTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      filterTabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      currentFilter = tab.dataset.filter || 'all';
+      applyFilter();
+    });
+  });
+}
+
 function updateStatusItem(requestId, data) {
   let item = document.getElementById(`status-${requestId}`);
   if (!item) {
     item = document.createElement('div');
     item.id = `status-${requestId}`;
-    item.className = 'status-item';
     statusList.appendChild(item);
   }
 
-  const truncatedUrl = truncateUrl(data.url || '', 45);
-  const createdAt = data.created_at ? formatRelativeTime(data.created_at) : '';
-  const segCount = data.segments ? data.segments.length : 0;
   const status = data.status || 'pending';
+  const isActiveCutting = status === 'processing' || status === 'pending';
+  item.className = `status-item status-${status} ${isActiveCutting ? 'status-active-cutting' : ''}`;
+
+  const fullUrl = data.url || '';
+  const createdAt = data.created_at ? formatRelativeTime(data.created_at) : '';
+  const segments = data.segments || [];
+  const segCount = segments.length;
+  const isFullDownload = segCount === 0 || data.download_full === true;
   const statusLabels = {
     pending: 'Đang chờ',
-    processing: 'Đang xử lý',
+    processing: '⚡ Đang cắt...',
     done: 'Hoàn thành',
-    error: 'Lỗi',
+    error: '⚠️ Lỗi',
     cancelling: 'Đang huỷ',
     cancelled: 'Đã huỷ'
   };
   const statusLabel = statusLabels[status] || status;
+
+  // ── Build request detail block ──
+  let detailHtml = '<div class="req-detail-grid">';
+
+  // Row: URL (clickable, full)
+  detailHtml += `
+    <div class="req-detail-row">
+      <span class="req-detail-icon">🔗</span>
+      <a href="${escapeAttr(fullUrl)}" target="_blank" rel="noopener" class="req-detail-url" title="${escapeAttr(fullUrl)}">${escapeHtml(fullUrl)}</a>
+    </div>`;
+
+  // Row: Requester name + email
+  const reqName = data.name || 'Anonymous';
+  const reqEmail = data.email || '';
+  detailHtml += `
+    <div class="req-detail-row">
+      <span class="req-detail-icon">👤</span>
+      <span class="req-detail-text"><strong>${escapeHtml(reqName)}</strong>${reqEmail ? ` · ${escapeHtml(reqEmail)}` : ''}</span>
+    </div>`;
+
+  // Row: Mode + segments list
+  if (isFullDownload) {
+    detailHtml += `
+      <div class="req-detail-row">
+        <span class="req-detail-icon">📹</span>
+        <span class="req-detail-text req-detail-mode-full">Tải full video</span>
+      </div>`;
+  } else {
+    detailHtml += `
+      <div class="req-detail-row">
+        <span class="req-detail-icon">✂️</span>
+        <span class="req-detail-text">Cắt <strong>${segCount}</strong> đoạn</span>
+      </div>`;
+    // Show actual segment timestamps
+    detailHtml += '<div class="req-segments-list">';
+    segments.forEach((seg, i) => {
+      detailHtml += `<span class="req-segment-chip">${i + 1}. ${escapeHtml(seg.start)} → ${escapeHtml(seg.end)}</span>`;
+    });
+    detailHtml += '</div>';
+  }
+
+  // Row: Live badge
+  if (data.is_live || (data.progress && data.progress.is_live)) {
+    detailHtml += `
+      <div class="req-detail-row">
+        <span class="req-detail-icon">🔴</span>
+        <span class="req-detail-text req-detail-live">Live stream</span>
+      </div>`;
+  }
+
+  // Row: Retry count
+  if (data.retry_count && data.retry_count > 0) {
+    detailHtml += `
+      <div class="req-detail-row">
+        <span class="req-detail-icon">🔄</span>
+        <span class="req-detail-text req-detail-retry">Đã thử lại ${data.retry_count} lần</span>
+      </div>`;
+  }
+
+  // Row: Submitted time
+  detailHtml += `
+    <div class="req-detail-row">
+      <span class="req-detail-icon">🕐</span>
+      <span class="req-detail-text req-detail-time">${createdAt}</span>
+    </div>`;
+
+  detailHtml += '</div>';
 
   let extras = '';
   const progress = data.progress;
 
   // ── Progress bar + segment info ──
   if (status === 'processing' && progress && progress.step === 'downloading') {
-    // Live stream indicator
     if (progress.is_live) {
       extras += `
         <div class="progress-live-info">
@@ -485,11 +808,6 @@ function updateStatusItem(requestId, data) {
     extras += `<div class="elapsed-time" data-start="${escapeAttr(data.processing_started_at)}">${formatElapsed(data.processing_started_at)}</div>`;
   }
 
-  // ── Cancel button ──
-  if (status === 'pending' || status === 'processing') {
-    extras += `<button class="btn-cancel" onclick="cancelRequest('${escapeAttr(requestId)}')">Huỷ yêu cầu</button>`;
-  }
-
   // ── Result links ──
   if (status === 'done' && data.result_links && data.result_links.length > 0) {
     const links = data.result_links
@@ -514,22 +832,36 @@ function updateStatusItem(requestId, data) {
 
   // ── Error message ──
   if (status === 'error' && data.error_message) {
-    extras += `<div class="error-msg">${escapeHtml(data.error_message)}</div>`;
+    extras += `<div class="error-msg">⚠️ Lỗi: ${escapeHtml(data.error_message)}</div>`;
   }
+
+  // ── Action Buttons (Retry, Reuse, Cancel) ──
+  let actionsHtml = '<div class="req-actions">';
+  if (status === 'error') {
+    actionsHtml += `<button type="button" class="btn-action btn-retry" onclick="retryRequest('${escapeAttr(requestId)}')">🔄 Thử lại ngay</button>`;
+    actionsHtml += `<button type="button" class="btn-action btn-reuse" onclick="reuseInForm('${escapeAttr(requestId)}')">📝 Sửa / Điền lại form</button>`;
+  } else if (status === 'pending' || status === 'processing') {
+    actionsHtml += `<button type="button" class="btn-action btn-reuse" onclick="reuseInForm('${escapeAttr(requestId)}')">📝 Xem / Sửa lại</button>`;
+    actionsHtml += `<button type="button" class="btn-cancel" onclick="cancelRequest('${escapeAttr(requestId)}')">🚫 Huỷ yêu cầu</button>`;
+  } else if (status === 'done') {
+    actionsHtml += `<button type="button" class="btn-action btn-reuse" onclick="reuseInForm('${escapeAttr(requestId)}')">📝 Cắt lại / Dùng lại thông tin</button>`;
+  } else {
+    actionsHtml += `<button type="button" class="btn-action btn-reuse" onclick="reuseInForm('${escapeAttr(requestId)}')">📝 Dùng lại thông tin</button>`;
+  }
+  actionsHtml += '</div>';
+
+  extras += actionsHtml;
 
   item.innerHTML = `
     <div class="status-item-header">
-      <span class="status-url" title="${escapeAttr(data.url || '')}">${escapeHtml(truncatedUrl)}</span>
+      <span class="req-id">${escapeHtml(requestId)}</span>
       <span class="badge badge-${status}">${statusLabel}</span>
     </div>
-    <div class="status-meta">
-      <span>${segCount} đoạn</span>
-      <span>${createdAt}</span>
-    </div>
+    ${detailHtml}
     ${extras}
   `;
 
-  if (emptyState) emptyState.style.display = 'none';
+  applyFilter();
 }
 
 function renderStatusList() {
@@ -538,6 +870,7 @@ function renderStatusList() {
   if (ids.length === 0) { if (emptyState) emptyState.style.display = ''; return; }
   if (emptyState) emptyState.style.display = 'none';
   ids.forEach(id => listenToRequest(id));
+  applyFilter();
 }
 
 // ═══════════════════════════════════════════
@@ -583,6 +916,44 @@ document.addEventListener('DOMContentLoaded', () => {
   renderStatusList();
   initAgentStatus();
   initSourceSelector();
+  initFilterTabs();
+
+  // Attach sync history button
+  const syncBtn = document.getElementById('sync-history-btn');
+  if (syncBtn) {
+    syncBtn.addEventListener('click', () => {
+      const email = emailInput?.value?.trim();
+      if (email) {
+        syncHistoryByEmail(email);
+      } else {
+        // Sync all recent from Firebase
+        db.ref('requests').limitToLast(30).once('value', (snapshot) => {
+          const data = snapshot.val();
+          if (!data) return;
+          let count = 0;
+          Object.keys(data).forEach(id => {
+            saveRequestId(id);
+            listenToRequest(id);
+            count++;
+          });
+          showToast(`Đã tải ${count} yêu cầu gần đây từ Firebase`, 'info');
+          applyFilter();
+        });
+      }
+    });
+  }
+
+  // Auto sync on email input change/blur
+  if (emailInput) {
+    emailInput.addEventListener('blur', () => {
+      const email = emailInput.value.trim();
+      if (email && isValidEmail(email)) syncHistoryByEmail(email);
+    });
+    // Auto-sync initial email if present
+    if (emailInput.value && isValidEmail(emailInput.value.trim())) {
+      syncHistoryByEmail(emailInput.value.trim());
+    }
+  }
 
   // Update elapsed times every second
   setInterval(() => {
