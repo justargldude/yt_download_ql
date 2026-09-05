@@ -1,23 +1,23 @@
 /* ═══════════════════════════════════════════
    YT CUT FOR HNYUQTL v4.0 — Application Logic
+   Pure helpers live in app-utils.js (window.YTUtils),
+   Firebase config lives in config.js (window.YT_WEB_CONFIG,
+   git-ignored — see config.example.js template).
    ═══════════════════════════════════════════ */
 
 // ── Configuration ──────────────────────────
-const CONFIG = {
-  firebase: {
-    apiKey: 'AIzaSyCMgmRAFeMjnBeg0wrHOLo1yuMb657mv08',
-    authDomain: 'yt-highlight-queue.firebaseapp.com',
-    databaseURL: 'https://yt-highlight-queue-default-rtdb.asia-southeast1.firebasedatabase.app',
-    projectId: 'yt-highlight-queue',
-    storageBucket: 'yt-highlight-queue.firebasestorage.app',
-    messagingSenderId: '270809931102',
-    appId: '1:270809931102:web:4d2ccbd54c967e83e143cf'
-  },
-  telegram: {
-    botToken: '8540195843:AAHBgsJ3U3oY3blgyOG9ZTXn9Rz9K3jyzwA',
-    chatId: '1415812326'
-  }
-};
+// window.YT_WEB_CONFIG is provided by config.js (deploy-time values,
+// NOT committed — see config.example.js). Fall back to the example
+// template so the page fails loudly instead of silently using secrets.
+const CONFIG = { firebase: window.YT_WEB_CONFIG?.firebase || {} };
+if (!CONFIG.firebase.databaseURL) {
+  console.error('[YT CUT] Missing Firebase config: copy config.example.js → config.js and fill in your values.');
+}
+const {
+  extractYouTubeVideoId, isLiveUrl, normalizeTime, parseSegments,
+  isValidYouTubeUrl, isValidEmail, escapeHtml, escapeAttr,
+  formatRelativeTime, formatElapsed, truncateUrl, makeRequestId,
+} = window.YTUtils;
 
 // ── Initialize Firebase ────────────────────
 firebase.initializeApp(CONFIG.firebase);
@@ -41,26 +41,8 @@ const liveBadge = document.getElementById('live-badge');
 const segmentsField = document.getElementById('field-segments');
 
 // ═══════════════════════════════════════════
-//  LIVE STREAM DETECTION
+//  LIVE STREAM DETECTION / URL HELPERS — moved to app-utils.js (YTUtils)
 // ═══════════════════════════════════════════
-
-function isLiveUrl(url) {
-  return /\/live\//i.test(url) || /[?&]live=/i.test(url);
-}
-
-// Normalize YouTube URL → video ID for dedup
-function extractYouTubeVideoId(url) {
-  try {
-    const u = new URL(url);
-    if (u.hostname.includes('youtu.be')) {
-      return u.pathname.slice(1).split('/')[0];
-    }
-    if (u.hostname.includes('youtube.com')) {
-      return u.searchParams.get('v') || u.pathname.split('/').pop();
-    }
-  } catch {}
-  return null;
-}
 
 if (urlInput) {
   urlInput.addEventListener('input', () => {
@@ -166,55 +148,12 @@ function renderSavedEmailsList() {
 })();
 
 // ═══════════════════════════════════════════
-//  TIME NORMALIZATION
+//  TIME NORMALIZATION / SEGMENT PARSING — moved to app-utils.js (YTUtils)
 // ═══════════════════════════════════════════
 
-function normalizeTime(raw) {
-  if (!raw || typeof raw !== 'string') return null;
-  let cleaned = raw.trim().replace(/[.\s]+/g, ':');
-  cleaned = cleaned.replace(/[^0-9:]/g, '');
-  if (!cleaned) return null;
-  const parts = cleaned.split(':').map(p => parseInt(p, 10) || 0);
-  let hours = 0, minutes = 0, seconds = 0;
-  if (parts.length === 1) { seconds = parts[0]; }
-  else if (parts.length === 2) { minutes = parts[0]; seconds = parts[1]; }
-  else { const tail = parts.slice(-3); hours = tail.length === 3 ? tail[0] : 0; minutes = tail.length >= 2 ? tail[tail.length - 2] : 0; seconds = tail[tail.length - 1]; }
-  if (seconds >= 60) { minutes += Math.floor(seconds / 60); seconds = seconds % 60; }
-  if (minutes >= 60) { hours += Math.floor(minutes / 60); minutes = minutes % 60; }
-  const pad = n => String(n).padStart(2, '0');
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-}
-
 // ═══════════════════════════════════════════
-//  SEGMENT PARSING
+//  VALIDATION — isValidYouTubeUrl/isValidEmail moved to app-utils.js
 // ═══════════════════════════════════════════
-
-const SEP_REGEX = /\s*(?:=>|->|→|—|–|~|-)\s*/;
-
-function parseSegments(text) {
-  const lines = text.split('\n');
-  const segments = [];
-  const errors = [];
-  lines.forEach((line, idx) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    const parts = trimmed.split(SEP_REGEX);
-    if (parts.length < 2) { errors.push(`Dòng ${idx + 1}: Không tìm thấy dấu ngăn`); return; }
-    const start = normalizeTime(parts[0]);
-    const end = normalizeTime(parts[parts.length - 1]);
-    if (!start) { errors.push(`Dòng ${idx + 1}: Thời gian bắt đầu không hợp lệ`); return; }
-    if (!end) { errors.push(`Dòng ${idx + 1}: Thời gian kết thúc không hợp lệ`); return; }
-    segments.push({ start, end });
-  });
-  return { segments, errors };
-}
-
-// ═══════════════════════════════════════════
-//  VALIDATION
-// ═══════════════════════════════════════════
-
-function isValidYouTubeUrl(url) { return /(?:youtube\.com|youtu\.be)/i.test(url); }
-function isValidEmail(email) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email); }
 function clearErrors() {
   document.querySelectorAll('.field-error').forEach(el => (el.textContent = ''));
   document.querySelectorAll('.field').forEach(el => el.classList.remove('field-valid', 'field-invalid'));
@@ -290,10 +229,10 @@ form.addEventListener('submit', async (e) => {
 
   setLoading(true);
 
-  // ── Duplicate URL check: kiểm tra xem có request pending/processing cùng URL không ──
+  // ── Duplicate URL check: chỉ quét 50 request gần nhất theo URL video (không tải cả DB) ──
   const videoId = extractYouTubeVideoId(finalUrl);
   try {
-    const snapshot = await db.ref('requests').once('value');
+    const snapshot = await db.ref('requests').orderByChild('created_at').limitToLast(50).once('value');
     const allRequests = snapshot.val();
     if (allRequests && videoId) {
       for (const [existingId, req] of Object.entries(allRequests)) {
@@ -314,7 +253,7 @@ form.addEventListener('submit', async (e) => {
     console.warn('Duplicate check failed:', e.message);
   }
 
-  const requestId = 'req_' + Date.now();
+  const requestId = makeRequestId();
   const payload = {
     url: finalUrl,
     segments: isFullDownload ? [] : segments,
@@ -333,7 +272,9 @@ form.addEventListener('submit', async (e) => {
     await db.ref(`requests/${requestId}`).set(payload);
     saveRequestId(requestId);
     saveEmail(email); // Lưu email vào danh sách thường dùng
-    sendTelegramNotification(payload, requestId).catch(() => {});
+    // Thông báo owner: push vào RTDB /notifications — agent (giữ bot token)
+    // sẽ consume và chuyển tiếp sang Telegram. Browser KHÔNG giữ token.
+    notifyOwnerViaAgent(payload, requestId).catch(() => {});
     showToast(selectedSource ? 'Đã gửi! Cắt lại từ source cache ⚡' : 'Đã gửi yêu cầu thành công!', 'success');
     form.reset();
     // Restore email after form.reset() clears everything
@@ -358,22 +299,19 @@ function flashField(fieldId, isValid) {
 }
 
 // ═══════════════════════════════════════════
-//  TELEGRAM NOTIFICATION
+//  OWNER NOTIFICATION (qua agent — browser không giữ bot token)
 // ═══════════════════════════════════════════
 
-async function sendTelegramNotification(payload, requestId) {
-  const text = [
-    '✂️ <b>Yêu cầu mới!</b>',
-    `Từ: ${escapeHtml(payload.name)} (${escapeHtml(payload.email)})`,
-    `URL: ${escapeHtml(payload.url)}`,
-    `Segments: ${payload.segments.length}`,
-    `ID: <code>${requestId}</code>`,
-    `Time: ${new Date().toLocaleString()}`
-  ].join('\n');
-  await fetch(`https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: CONFIG.telegram.chatId, text, parse_mode: 'HTML', disable_web_page_preview: true })
+async function notifyOwnerViaAgent(payload, requestId) {
+  // Agent (agent/telegram.js setupNotificationsListener) consume queue này,
+  // escape mọi field user-controlled rồi mới gọi Telegram API.
+  await db.ref('notifications').push({
+    name: payload.name || '',
+    email: payload.email || '',
+    url: payload.url || '',
+    segments_count: (payload.segments || []).length,
+    request_id: requestId,
+    text: `✂️ Yêu cầu mới!\nTừ: ${payload.name || 'Anonymous'} (${payload.email})\nURL: ${payload.url}\nSegments: ${(payload.segments || []).length}\nID: ${requestId}\nTime: ${new Date().toLocaleString()}`,
   });
 }
 
@@ -536,7 +474,7 @@ async function retryRequest(requestId) {
   const data = requestDataMap.get(requestId);
   if (!data) return;
 
-  const newReqId = 'req_' + Date.now();
+  const newReqId = makeRequestId();
   const payload = {
     url: data.url,
     segments: data.segments || [],
@@ -874,39 +812,8 @@ function renderStatusList() {
 }
 
 // ═══════════════════════════════════════════
-//  UTILITIES
+//  UTILITIES — pure helpers moved to app-utils.js (YTUtils)
 // ═══════════════════════════════════════════
-
-function escapeHtml(str) { const div = document.createElement('div'); div.textContent = str; return div.innerHTML; }
-function escapeAttr(str) { return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-function truncateUrl(url, max) { if (url.length <= max) return url; return url.substring(0, max) + '…'; }
-
-function formatRelativeTime(isoString) {
-  try {
-    const diffMs = Date.now() - new Date(isoString).getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return 'Vừa xong';
-    if (diffMin < 60) return `${diffMin} phút trước`;
-    const diffHr = Math.floor(diffMin / 60);
-    if (diffHr < 24) return `${diffHr} giờ trước`;
-    const diffDay = Math.floor(diffHr / 24);
-    if (diffDay < 7) return `${diffDay} ngày trước`;
-    return new Date(isoString).toLocaleDateString('vi-VN', { month: 'short', day: 'numeric' });
-  } catch { return ''; }
-}
-
-function formatElapsed(startIso) {
-  try {
-    const diff = Math.floor((Date.now() - new Date(startIso).getTime()) / 1000);
-    if (diff < 0) return '0s';
-    if (diff < 60) return `${diff}s`;
-    const m = Math.floor(diff / 60);
-    const s = diff % 60;
-    if (m < 60) return `${m}m${String(s).padStart(2, '0')}s`;
-    const h = Math.floor(m / 60);
-    return `${h}h${String(m % 60).padStart(2, '0')}m`;
-  } catch { return ''; }
-}
 
 // ═══════════════════════════════════════════
 //  INITIALIZATION

@@ -78,8 +78,9 @@
   let _progressCurrent = 0;
   let _progressTotal = 0;
   let _progressFailed = 0;
-  const DEFAULT_UPLOAD_ENDPOINT = 'https://untagged-unleaded-bonelike.ngrok-free.dev/dlib/upload';
-  const DEFAULT_UPLOAD_API_KEY = 'ptit-dlib-2026-secret';
+  // NO hardcoded endpoint/api-key here anymore (security): values come
+  // from chrome.storage.sync via the popup UI. Empty → upload disabled,
+  // local PDF save only.
 
   // ── beforeunload guard ─────────────────────────────────────────────
   function onBeforeUnload(e) {
@@ -433,11 +434,11 @@
   // ── Download trigger ───────────────────────────────────────────────
 
   async function uploadPdfToDrive(pdfBytes, filename, meta) {
-    const endpoint = (meta.uploadEndpoint || DEFAULT_UPLOAD_ENDPOINT).trim();
-    const apiKey = (meta.uploadApiKey || DEFAULT_UPLOAD_API_KEY || '').trim();
+    const endpoint = (meta.uploadEndpoint || '').trim();
+    const apiKey = (meta.uploadApiKey || '').trim();
 
     if (!endpoint) {
-      throw new Error('Upload endpoint is not configured');
+      throw new Error('Upload endpoint is not configured — set it in the extension popup (e.g. http://127.0.0.1:8765/dlib/upload)');
     }
 
     const uploadCtrl = new AbortController();
@@ -500,7 +501,7 @@
   // ── Upload server health check ────────────────────────────────────
 
   async function checkUploadServer(meta) {
-    const endpoint = (meta.uploadEndpoint || DEFAULT_UPLOAD_ENDPOINT).trim();
+    const endpoint = (meta.uploadEndpoint || '').trim();
     if (!endpoint) return false;
 
     // Check if localhost (owner's agent) is active to verify if this is the owner's machine.

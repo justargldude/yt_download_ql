@@ -37,7 +37,10 @@
 
   let currentTabId = null;
   let currentMetadata = null;
-  const DEFAULT_UPLOAD_ENDPOINT = 'https://untagged-unleaded-bonelike.ngrok-free.dev/dlib/upload';
+  // No hardcoded tunnel endpoint: the user configures the upload endpoint
+  // (e.g. http://127.0.0.1:8765/dlib/upload when running on the owner's
+  // machine, or their own tunnel URL) in the popup input below.
+  const DEFAULT_UPLOAD_ENDPOINT = '';
 
   const MAX_LOG = 100;
   const logLines = [];
