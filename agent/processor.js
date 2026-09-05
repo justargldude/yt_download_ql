@@ -7,24 +7,24 @@
 //   5. Xoá highlights, giữ source 12h
 import { spawn } from 'child_process';
 import { mkdir, stat, unlink, readdir, rm, writeFile, readFile } from 'fs/promises';
-import { existsSync, createReadStream } from 'fs';
+import { existsSync } from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { ts } from './lib/logger.js';
 import { hashUrl } from './lib/url-hash.js';
+import { augmentPathEnv, extraRuntimeDirs, isWindows } from './lib/paths.js';
+import { killProcessTree as libKillProcessTree, spawnOpts } from './lib/proc.js';
 import { sendResultEmail } from './emailer.js';
 import { uploadToGoogleDrive } from './uploader.js';
 
+// Agent root (parent of lib/) — anchor for relative tool paths
+const AGENT_BIN_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
-// Augment PATH so yt-dlp's Python subprocess can find deno/quickjs
-const EXTRA_PATH_DIRS = [
-  path.join(process.env.HOME || '', '.deno', 'bin'),
-  path.join(process.env.HOME || '', 'bin'),
-];
-const AUGMENTED_ENV = {
-  ...process.env,
-  PATH: [...EXTRA_PATH_DIRS, process.env.PATH || ''].join(':'),
-};
+// Augment PATH (cross-platform: path.delimiter) so yt-dlp's subprocesses
+// can find deno/quickjs runtimes installed under the user's home.
+const AUGMENTED_ENV = augmentPathEnv(extraRuntimeDirs());
 
 // Download lock per URL hash — chỉ tải 1 lần dù nhiều request cùng URL
 const downloadLocks = new Map();  // urlHash → Promise<void>
@@ -81,7 +81,7 @@ function parseProgressLine(line) {
 // ── SPAWN ───────────────────────────────────────────────────────────────
 function spawnAsync(cmd, args, { prefix = '', cwd, onLine, onProc, env } = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { cwd, env: env || AUGMENTED_ENV, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(cmd, args, spawnOpts({ cwd, env: env || AUGMENTED_ENV, detached: true }));
     let stderrBuf = '';
     if (onProc) onProc(proc);
     const handle = (chunk) => {
@@ -100,10 +100,9 @@ function spawnAsync(cmd, args, { prefix = '', cwd, onLine, onProc, env } = {}) {
   });
 }
 
+// Cross-platform tree-kill (POSIX groups / Windows taskkill) — delegate to lib
 function killProcessTree(proc) {
-  if (!proc || !proc.pid) return;
-  try { process.kill(-proc.pid, 'SIGTERM'); }
-  catch (e) { try { proc.kill('SIGKILL'); } catch (e2) {} }
+  return libKillProcessTree(proc);
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -128,10 +127,27 @@ export async function processRequest(request, requestId, config, db, checkCancel
 
   const ffmpegDir = path.dirname(config.paths.ffmpeg);
   const ytdlpDir = path.dirname(config.paths.ytdlp);
-  let aria2cPath = path.join(ytdlpDir, 'aria2c');
-  let useAria2c = existsSync(aria2cPath);
-  if (!useAria2c && existsSync('/usr/bin/aria2c')) {
-    aria2cPath = '/usr/bin/aria2c';
+  // Cross-platform aria2c discovery: prefer sitting next to the configured
+  // yt-dlp binary (same dir, e.g. pipx/pip installs), else bare command
+  // name resolved by yt-dlp via PATH. Graceful: if aria2c is missing, the
+  // native downloader is used (existing retry path also covers failures).
+  const aria2cName = `aria2c${isWindows() ? '.exe' : ''}`;
+  const aria2cCandidates = [
+    path.join(ytdlpDir, aria2cName),
+    path.resolve(AGENT_BIN_DIR, aria2cName),
+  ];
+  let aria2cPath = null;
+  let useAria2c = false;
+  for (const candidate of aria2cCandidates) {
+    if (candidate !== aria2cName && existsSync(candidate)) {
+      aria2cPath = candidate;
+      useAria2c = true;
+      break;
+    }
+  }
+  if (!useAria2c) {
+    // Fall back to bare name — yt-dlp resolves it via PATH at runtime.
+    aria2cPath = aria2cName;
     useAria2c = true;
   }
   const cookiesFile = config.paths.cookiesFile;

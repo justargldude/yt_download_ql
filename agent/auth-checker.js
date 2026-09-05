@@ -8,18 +8,12 @@ import { google } from 'googleapis';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ts } from './lib/logger.js';
+import { augmentPathEnv, extraRuntimeDirs } from './lib/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Augment PATH so yt-dlp's Python subprocess can find deno/quickjs
-const AUGMENTED_ENV = {
-  ...process.env,
-  PATH: [
-    path.join(process.env.HOME || '', '.deno', 'bin'),
-    path.join(process.env.HOME || '', 'bin'),
-    process.env.PATH || '',
-  ].join(':'),
-};
+// Augment PATH (cross-platform) for yt-dlp subprocesses
+const AUGMENTED_ENV = augmentPathEnv(extraRuntimeDirs());
 
 // ── SPAWN HELPER ────────────────────────────────────────────────────────
 function runCommand(cmd, args, timeoutMs = 30000) {

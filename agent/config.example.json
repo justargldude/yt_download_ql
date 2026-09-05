@@ -29,8 +29,8 @@
     ]
   },
   "paths": {
-    "ytdlp": "/usr/bin/yt-dlp",
-    "ffmpeg": "/usr/bin/ffmpeg",
+    "ytdlp": "yt-dlp",
+    "ffmpeg": "ffmpeg",
     "outputDir": "~/YT_Queue_Output",
     "cookiesFile": "~/cookies.txt"
   },

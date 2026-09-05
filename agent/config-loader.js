@@ -3,6 +3,7 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { resolveConfigPaths } from './lib/paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -41,7 +42,21 @@ export async function loadConfig() {
       }
     }
 
-    return config;
+    // Cross-platform normalize: expand '~' → homedir, resolve relative
+    // tool paths, keep bare command names for PATH lookup (win/linux).
+    const normalized = resolveConfigPaths(config);
+
+    // Defaults cho settings section (tránh crash nếu user thiếu section này)
+    normalized.settings = {
+      pollIntervalMs: 30000,
+      cleanupIntervalMs: 3600000,
+      sourceRetentionHours: 12,
+      maxFileSizeForEmailMB: 25,
+      concurrentFragments: 16,
+      ...Object.fromEntries(Object.entries(config.settings || {}).filter(([, v]) => v != null)),
+    };
+
+    return normalized;
   } catch (err) {
     console.error('❌ Failed to parse config.json:', err.message);
     process.exit(1);

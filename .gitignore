@@ -41,3 +41,6 @@ run_1788637316/
 
 # Deploy-time web config (contains Firebase web keys — do not commit)
 web/config.js
+
+# Auto-generated run directory
+run_1788641016/

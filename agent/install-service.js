@@ -11,6 +11,18 @@ const shPath = path.join(__dirname, 'start.sh');
 async function main() {
   console.log('📦 Installing YT-Queue-Agent...\n');
 
+  // ── Windows: không có systemd — hướng dẫn start-agent.bat + schtasks ──
+  if (process.platform === 'win32') {
+    console.log('🪟 Windows detected — systemd not available.\n');
+    console.log('   1. Auto-restart foreground: chạy "start-agent.bat" trong thư mục agent.');
+    console.log('   2. Tự khởi động khi login (tuỳ chọn), chạy với quyền user trong PowerShell:');
+    console.log('      schtasks /create /tn "YT-Queue-Agent" /tr "< full path to >\\start-agent.bat" /sc onlogon');
+    console.log('      (hoặc Task Scheduler GUI → Create Task → Trigger: At log on → Action: start.bat)');
+    console.log('   3. Xoá task: schtasks /delete /tn "YT-Queue-Agent" /f');
+    console.log('\n   Lưu ý: cần node, yt-dlp, ffmpeg trên PATH (winget install yt-dlp.yt-dlp / Gyan.FFmpeg).');
+    return;
+  }
+
   // 1. Tạo start.sh để chạy thủ công
   const shContent = `#!/usr/bin/env bash
 # start.sh — Chạy agent với auto-restart khi crash
