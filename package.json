@@ -1,0 +1,15 @@
+{
+  "name": "yt-highlight-queue",
+  "version": "4.0.0",
+  "private": true,
+  "type": "module",
+  "description": "YT Highlight Queue — user-hosted YouTube download + highlight cutting queue (web form + Firebase RTDB + local agent)",
+  "scripts": {
+    "test": "node --test tests/",
+    "start": "node agent/agent.js",
+    "install-service": "node agent/install-service.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -20,3 +20,9 @@ Thumbs.db
 agent/start.bat
 push_to_github.bat
 start_tunnel.ps1
+node_modules/
+agent/config.json
+agent/firebase-service-account.json
+agent/gdrive-service-account.json
+agent/start.sh
+run_*/
