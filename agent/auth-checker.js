@@ -7,7 +7,7 @@ import { writeFile } from 'fs/promises';
 import { google } from 'googleapis';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { ts } from './agent.js';
+import { ts } from './lib/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

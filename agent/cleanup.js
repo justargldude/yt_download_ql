@@ -2,7 +2,8 @@
 import { readdir, stat, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
-import { ts } from './agent.js';
+import { ts } from './lib/logger.js';
+import { hashUrl } from './lib/url-hash.js';
 
 /**
  * Bắt đầu job dọn dẹp định kỳ.
@@ -39,18 +40,9 @@ async function runCleanup(outputDir, sourceMaxHours, db) {
       for (const [id, req] of Object.entries(allReqs)) {
         if (['pending', 'processing'].includes(req.status)) {
           activeRequestIds.add(id);
-          // Lưu source hash của request đang active
+          // Lưu source hash của request đang active (dùng hash chuẩn từ lib/url-hash.js)
           if (req.url) {
-            try {
-              const u = new URL(req.url);
-              u.searchParams.delete('si');
-              u.searchParams.delete('t');
-              u.searchParams.delete('feature');
-              const videoId = u.searchParams.get('v') || u.pathname.split('/').pop();
-              const clean = `youtube:${videoId}`;
-              const hash = (await import('crypto')).createHash('md5').update(clean).digest('hex').slice(0, 12);
-              activeSourceHashes.add(hash);
-            } catch (e) { /* ignore */ }
+            activeSourceHashes.add(hashUrl(req.url));
           }
         }
       }

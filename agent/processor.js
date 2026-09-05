@@ -6,11 +6,11 @@
 //   4. Upload + email
 //   5. Xoá highlights, giữ source 12h
 import { spawn } from 'child_process';
-import { mkdir, stat, unlink, readdir, rm, writeFile } from 'fs/promises';
+import { mkdir, stat, unlink, readdir, rm, writeFile, readFile } from 'fs/promises';
 import { existsSync, createReadStream } from 'fs';
 import path from 'path';
-import crypto from 'crypto';
-import { ts } from './agent.js';
+import { ts } from './lib/logger.js';
+import { hashUrl } from './lib/url-hash.js';
 import { sendResultEmail } from './emailer.js';
 import { uploadToGoogleDrive } from './uploader.js';
 
@@ -28,22 +28,6 @@ const AUGMENTED_ENV = {
 
 // Download lock per URL hash — chỉ tải 1 lần dù nhiều request cùng URL
 const downloadLocks = new Map();  // urlHash → Promise<void>
-
-// ── URL HASH ────────────────────────────────────────────────────────────
-function hashUrl(url) {
-  try {
-    const u = new URL(url);
-    u.searchParams.delete('si');
-    u.searchParams.delete('t');
-    u.searchParams.delete('feature');
-    // Lấy video ID cho YouTube
-    const videoId = u.searchParams.get('v') || u.pathname.split('/').pop();
-    const clean = `youtube:${videoId}`;
-    return crypto.createHash('md5').update(clean).digest('hex').slice(0, 12);
-  } catch {
-    return crypto.createHash('md5').update(url).digest('hex').slice(0, 12);
-  }
-}
 
 // ── HELPERS ──────────────────────────────────────────────────────────────
 function timeTag(timestamp) {
@@ -377,10 +361,16 @@ export async function processRequest(request, requestId, config, db, checkCancel
   // Save source metadata
   const metaPath = path.join(sourceDir, '_meta.json');
   try {
+    let existingDownloadedAt = null;
+    if (sourceReused && existsSync(metaPath)) {
+      try {
+        existingDownloadedAt = JSON.parse(await readFile(metaPath, 'utf-8')).downloaded_at;
+      } catch (e) { /* ignore malformed */ }
+    }
     await writeFile(metaPath, JSON.stringify({
       url: request.url,
       hash: urlHash,
-      downloaded_at: sourceReused ? (existsSync(metaPath) ? JSON.parse(await readFileText(metaPath)).downloaded_at : new Date().toISOString()) : new Date().toISOString(),
+      downloaded_at: existingDownloadedAt || new Date().toISOString(),
       file_size_mb: parseInt(sourceSizeMB),
     }), 'utf-8');
   } catch (e) { /* ignore */ }
@@ -508,12 +498,6 @@ export async function processRequest(request, requestId, config, db, checkCancel
       fileSizeMB: parseInt(sourceSizeMB),
     },
   };
-}
-
-// Helper: read file as text
-async function readFileText(p) {
-  const { readFile } = await import('fs/promises');
-  return readFile(p, 'utf-8');
 }
 
 // Helper: xóa file partial/incomplete trong sourceDir để tránh HTTP 416 khi retry

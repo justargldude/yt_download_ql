@@ -2,7 +2,10 @@
 import nodemailer from 'nodemailer';
 import path from 'path';
 import { stat } from 'fs/promises';
-import { ts } from './agent.js';
+import { ts } from './lib/logger.js';
+import { escapeHtml } from './lib/escape.js';
+
+export { escapeHtml };
 
 function createTransporter(config) {
   return nodemailer.createTransport({
@@ -93,15 +96,15 @@ async function sendSingleEmail(transporter, config, request, attachFiles, driveL
   let segmentTableHtml = '';
 
   if (!isFullDownload) {
-    const segmentRows = segments.map((seg, i) => {
-      const fileName = allFiles[i] ? path.basename(allFiles[i]) : '—';
-      const inBatch = attachBasenames.has(fileName);
+    const segmentRows = safeSegments.map((seg, i) => {
+      const fileName = allFiles[i] ? escapeHtml(path.basename(allFiles[i])) : '—';
+      const inBatch = attachBasenames.has(allFiles[i] ? path.basename(allFiles[i]) : '');
       const bgColor = inBatch ? '#f0f7f0' : '#fff';
       return `<tr>
         <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:center;background:${bgColor}">${i + 1}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #eee;font-family:monospace;background:${bgColor}">${seg.start}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #eee;font-family:monospace;background:${bgColor}">${seg.end}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #eee;background:${bgColor}">${fileName}${inBatch ? '' : ''}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #eee;background:${bgColor}">${fileName}</td>
       </tr>`;
     }).join('\n');
 
@@ -118,7 +121,7 @@ async function sendSingleEmail(transporter, config, request, attachFiles, driveL
         <tbody>${segmentRows}</tbody>
       </table>`;
   } else {
-    const fileName = allFiles[0] ? path.basename(allFiles[0]) : 'video';
+    const fileName = allFiles[0] ? escapeHtml(path.basename(allFiles[0])) : 'video';
     segmentTableHtml = `
       <div style="background:#f0f7f0;padding:12px 16px;border-radius:6px;margin-bottom:20px">
         <p style="margin:0;font-weight:600">📹 Full video download</p>
@@ -130,7 +133,7 @@ async function sendSingleEmail(transporter, config, request, attachFiles, driveL
   let deliveryHtml = '';
   if (driveLinks && driveLinks.length > 0) {
     const links = driveLinks.map(d =>
-      `<li style="margin:4px 0"><a href="${d.link}" style="color:#1a73e8;text-decoration:none">${d.name}</a></li>`
+      `<li style="margin:4px 0"><a href="${escapeHtml(d.link)}" style="color:#1a73e8;text-decoration:none">${escapeHtml(d.name)}</a></li>`
     ).join('\n');
     deliveryHtml = `
       <p style="font-weight:600;margin-bottom:8px">Download:</p>
@@ -142,29 +145,38 @@ async function sendSingleEmail(transporter, config, request, attachFiles, driveL
   }
 
   if (batchLabel) {
-    deliveryHtml += `<p style="color:#888;font-size:13px">Email${batchLabel}</p>`;
+    deliveryHtml += `<p style="color:#888;font-size:13px">Email${escapeHtml(batchLabel)}</p>`;
   }
 
   if (oversizedFiles.length > 0) {
-    const names = oversizedFiles.map(f => `${path.basename(f.path)} (${f.sizeMB.toFixed(0)} MB)`).join(', ');
-    deliveryHtml += `<p style="color:#c62828;font-size:13px">File quá lớn cho email: ${names}. Vui lòng liên hệ cho thằng chồng của bạn để nhận qua Google Drive.</p>`;
+    const names = oversizedFiles.map(f => `${escapeHtml(path.basename(f.path))} (${f.sizeMB.toFixed(0)} MB)`).join(', ');
+    deliveryHtml += `<p style="color:#c62828;font-size:13px">File quá lớn cho email: ${names}. Vui lòng liên hệ chủ hệ thống để nhận qua Google Drive.</p>`;
   }
 
   // Truncate URL for display
   const displayUrl = request.url.length > 70 ? request.url.substring(0, 70) + '...' : request.url;
 
+  // Escape mọi chuỗi user-controlled trước khi đưa vào HTML email
+  const safeName = escapeHtml(request.name || 'there');
+  const safeUrlAttr = escapeHtml(request.url);
+  const safeDisplayUrl = escapeHtml(displayUrl);
+  const safeSegments = (request.segments || []).map((s) => ({
+    start: escapeHtml(s?.start ?? ''),
+    end: escapeHtml(s?.end ?? ''),
+  }));
+
   const html = `
 <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:600px;margin:0 auto;color:#333">
   <div style="padding:24px 0;border-bottom:2px solid #e0e0e0">
     <h2 style="margin:0;font-size:18px;font-weight:600;color:#222">
-      Highlight clips — ${dateStr}${batchLabel}
+      Highlight clips — ${escapeHtml(dateStr)}${escapeHtml(batchLabel)}
     </h2>
   </div>
 
   <div style="padding:20px 0">
-    <p style="margin:0 0 4px">Hi <strong>${request.name || 'there'}</strong>,</p>
+    <p style="margin:0 0 4px">Hi <strong>${safeName}</strong>,</p>
     <p style="margin:0 0 16px;color:#555">
-      Clips from <a href="${request.url}" style="color:#1a73e8;text-decoration:none">${displayUrl}</a>
+      Clips from <a href="${safeUrlAttr}" style="color:#1a73e8;text-decoration:none">${safeDisplayUrl}</a>
     </p>
 
     ${segmentTableHtml}
@@ -173,7 +185,7 @@ async function sendSingleEmail(transporter, config, request, attachFiles, driveL
   </div>
 
   <div style="padding:16px 0;border-top:1px solid #eee;color:#999;font-size:12px">
-    ${fromName}
+    ${escapeHtml(fromName)}
   </div>
 </div>`;
 

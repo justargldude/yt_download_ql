@@ -4,7 +4,6 @@ import { getDatabase } from 'firebase-admin/database';
 import { readFile, rm } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import crypto from 'crypto';
 import dns from 'dns';
 
 // Fix slow/broken IPv6 lookup hang on Linux
@@ -13,31 +12,16 @@ dns.setDefaultResultOrder('ipv4first');
 import { loadConfig } from './config-loader.js';
 import { processRequest } from './processor.js';
 import { startCleanupJob } from './cleanup.js';
-import { sendTelegramMessage } from './telegram.js';
+import { sendTelegramMessage, setupNotificationsListener } from './telegram.js';
 import { runStartupChecks } from './auth-checker.js';
 import { startDlibUploadServer } from './dlib-upload-server.js';
+import { ts } from './lib/logger.js';
+import { normalizeUrlForDedup } from './lib/url-hash.js';
+
+// Backwards-compat re-export: các module cũ import { ts } từ agent.js
+export { ts };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// ── TIMESTAMP HELPER (export cho các module khác dùng) ──────────────────
-export function ts() {
-  const now = new Date();
-  return `[${now.toTimeString().slice(0, 8)}]`;
-}
-
-// ── URL HASH (strip tracking params) ────────────────────────────────────
-function hashUrl(url) {
-  try {
-    const u = new URL(url);
-    u.searchParams.delete('si');
-    u.searchParams.delete('t');
-    u.searchParams.delete('feature');
-    const clean = u.origin + u.pathname + '?v=' + (u.searchParams.get('v') || '');
-    return crypto.createHash('md5').update(clean).digest('hex').slice(0, 12);
-  } catch {
-    return crypto.createHash('md5').update(url).digest('hex').slice(0, 12);
-  }
-}
 
 // ── GLOBAL STATE ────────────────────────────────────────────────────────
 let db = null;
@@ -135,6 +119,10 @@ async function main() {
 
   // 7. Lắng nghe real-time qua Firebase listener
   setupRealtimeListener();
+
+  // 7b. Consume hàng đợi notifications từ web client (chuyển tiếp Telegram)
+  //     Web client không giữ bot token — token chỉ nằm trong config.json
+  setupNotificationsListener(config, db);
 
   // 8. Main polling loop
   console.log(`${ts()} 🔄 Starting poll loop...`);
@@ -441,25 +429,7 @@ async function stopDlibUploadServer() {
 }
 
 // ── NORMALIZE URL FOR DEDUP ─────────────────────────────────────────────
-function normalizeUrlForDedup(url) {
-  if (!url) return null;
-  try {
-    const u = new URL(url);
-    // YouTube: chỉ cần videoId
-    if (u.hostname.includes('youtube.com') || u.hostname.includes('youtu.be')) {
-      let videoId;
-      if (u.hostname.includes('youtu.be')) {
-        videoId = u.pathname.slice(1);
-      } else {
-        videoId = u.searchParams.get('v') || u.pathname.split('/').pop();
-      }
-      return videoId ? `yt:${videoId}` : url;
-    }
-    return url;
-  } catch {
-    return url;
-  }
-}
+// (Đã chuyển vào lib/url-hash.js — giữ alias nội bộ)
 
 // ── GRACEFUL SHUTDOWN ───────────────────────────────────────────────────
 async function handleShutdown() {

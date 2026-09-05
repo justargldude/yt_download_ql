@@ -6,7 +6,7 @@ import path from 'path';
 import crypto from 'crypto';
 
 import { uploadToGoogleDrive } from './uploader.js';
-import { ts } from './agent.js';
+import { ts } from './lib/logger.js';
 
 function getServerConfig(config) {
   const raw = config.dlib_upload || {};

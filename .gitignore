@@ -26,3 +26,9 @@ agent/firebase-service-account.json
 agent/gdrive-service-account.json
 agent/start.sh
 run_*/
+
+# Auto-generated run directory
+run_1788632096/
+
+# Auto-generated run directory
+run_1788632426/
