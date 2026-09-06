@@ -1,7 +1,7 @@
 // lib/proc.js — Cross-platform process-tree control.
 // POSIX: process groups (kill(-pid)) with SIGTERM→SIGKILL fallback.
 // Windows: `taskkill /PID <pid> /T /F` (tree-kill, no process groups).
-import { spawn } from 'child_process';
+import { spawnSync } from 'child_process';
 import { isWindows } from './paths.js';
 
 /**
@@ -22,12 +22,15 @@ export function killProcessTree(procOrPid) {
 
   if (isWindows()) {
     // Windows has no process groups for detached spawn; taskkill /T walks
-    // the child tree. Fire-and-forget with stdio ignore.
+    // the child tree. spawnSync (blocking) ensures the tree is reaped
+    // BEFORE we touch the root handle — a fire-and-forget spawn could be
+    // outrun by procOrPid.kill() and orphan grandchildren.
     try {
-      spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
         stdio: 'ignore',
         windowsHide: true,
         shell: false,
+        timeout: 10_000,
       });
     } catch { /* best effort */ }
     // Belt-and-braces: direct kill on the handle if we got one

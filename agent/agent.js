@@ -12,7 +12,7 @@ dns.setDefaultResultOrder('ipv4first');
 import { loadConfig } from './config-loader.js';
 import { processRequest } from './processor.js';
 import { startCleanupJob } from './cleanup.js';
-import { sendTelegramMessage, setupNotificationsListener } from './telegram.js';
+import { sendTelegramMessage, setupNotificationsListener, escapeTelegram } from './telegram.js';
 import { runStartupChecks } from './auth-checker.js';
 import { startDlibUploadServer } from './dlib-upload-server.js';
 import { ts } from './lib/logger.js';
@@ -352,6 +352,8 @@ async function handleSingleRequest(requestId, request) {
   const reqRef = db.ref(`requests/${requestId}`);
   const name = request.name || 'Unknown';
   const url = request.url || '(no url)';
+  const safeName = escapeTelegram(name);
+  const safeUrl = escapeTelegram(url);
 
   console.log(`${ts()} ─────────────────────────────────────────`);
   console.log(`${ts()} 🆕 Processing: ${requestId}`);
@@ -377,7 +379,7 @@ async function handleSingleRequest(requestId, request) {
     });
 
     // b. Telegram thông báo
-    await sendTelegramMessage(config, `⚙️ Processing request from <b>${name}</b>...\n🔗 ${url}`);
+    await sendTelegramMessage(config, `⚙️ Processing request from <b>${safeName}</b>...\n🔗 ${safeUrl}`);
 
     // c. Xử lý chính
     const result = await processRequest(request, requestId, config, db, checkCancelled, ytMode);
@@ -414,9 +416,9 @@ async function handleSingleRequest(requestId, request) {
     // f. Telegram kết quả
     await sendTelegramMessage(
       config,
-      `✅ Done! <b>${name}</b>\n` +
+      `✅ Done! <b>${safeName}</b>\n` +
       `📹 ${result.highlightCount} highlight(s), ${result.totalSizeMB} MB\n` +
-      `🔗 ${url}`
+      `🔗 ${safeUrl}`
     );
   } catch (err) {
     // Xử lý cancel
@@ -433,7 +435,7 @@ async function handleSingleRequest(requestId, request) {
       try {
         await reqRef.update({ status: 'cancelled', cancelled_at: new Date().toISOString() });
       } catch (e) { /* ignore */ }
-      await sendTelegramMessage(config, `🚫 Request cancelled & files cleaned: <b>${name}</b>\n🔗 ${url}`);
+      await sendTelegramMessage(config, `🚫 Request cancelled & files cleaned: <b>${safeName}</b>\n🔗 ${safeUrl}`);
     } else {
       console.error(`${ts()} ❌ Request ${requestId} failed: ${err.message}`);
 
@@ -449,9 +451,9 @@ async function handleSingleRequest(requestId, request) {
 
       await sendTelegramMessage(
         config,
-        `❌ Failed: <b>${name}</b>\n` +
-        `Error: ${err.message.slice(0, 200)}\n` +
-        `🔗 ${url}`
+        `❌ Failed: <b>${safeName}</b>\n` +
+        `Error: ${escapeTelegram(err.message.slice(0, 200))}\n` +
+        `🔗 ${safeUrl}`
       );
     }
   } finally {

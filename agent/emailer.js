@@ -90,6 +90,16 @@ async function sendSingleEmail(transporter, config, request, attachFiles, driveL
   const dateStr = formatDate(request.created_at);
   const fromName = config.email.fromName || 'YT Cut';
 
+  // Escape MỌI chuỗi user-controlled NGAY từ đầu (tránh TDZ reference bug)
+  const displayUrl = request.url.length > 70 ? request.url.substring(0, 70) + '...' : request.url;
+  const safeName = escapeHtml(request.name || 'there');
+  const safeUrlAttr = escapeHtml(request.url);
+  const safeDisplayUrl = escapeHtml(displayUrl);
+  const safeSegments = (request.segments || []).map((s) => ({
+    start: escapeHtml(s?.start ?? ''),
+    end: escapeHtml(s?.end ?? ''),
+  }));
+
   // Bảng segments (hoặc full video info)
   const isFullDownload = segments.length === 0;
   const attachBasenames = new Set(attachFiles.map(fp => path.basename(fp)));
@@ -152,18 +162,6 @@ async function sendSingleEmail(transporter, config, request, attachFiles, driveL
     const names = oversizedFiles.map(f => `${escapeHtml(path.basename(f.path))} (${f.sizeMB.toFixed(0)} MB)`).join(', ');
     deliveryHtml += `<p style="color:#c62828;font-size:13px">File quá lớn cho email: ${names}. Vui lòng liên hệ chủ hệ thống để nhận qua Google Drive.</p>`;
   }
-
-  // Truncate URL for display
-  const displayUrl = request.url.length > 70 ? request.url.substring(0, 70) + '...' : request.url;
-
-  // Escape mọi chuỗi user-controlled trước khi đưa vào HTML email
-  const safeName = escapeHtml(request.name || 'there');
-  const safeUrlAttr = escapeHtml(request.url);
-  const safeDisplayUrl = escapeHtml(displayUrl);
-  const safeSegments = (request.segments || []).map((s) => ({
-    start: escapeHtml(s?.start ?? ''),
-    end: escapeHtml(s?.end ?? ''),
-  }));
 
   const html = `
 <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:600px;margin:0 auto;color:#333">

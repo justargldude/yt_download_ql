@@ -124,30 +124,31 @@ async function handleUpload(req, res, cfg, config, rateLimiter) {
     return;
   }
 
-  const contentType = (getHeader(req, 'content-type') || '').toLowerCase();
-  if (!contentType.startsWith('application/pdf')) {
-    sendJson(req, res, cfg, 415, { ok: false, error: 'Expected application/pdf' });
-    return;
-  }
-
-  const contentLength = Number(getHeader(req, 'content-length') || 0);
-  const maxBytes = cfg.maxUploadMB * 1024 * 1024;
-  if (contentLength > maxBytes) {
-    sendJson(req, res, cfg, 413, {
-      ok: false,
-      error: `PDF is larger than ${cfg.maxUploadMB} MB`,
-    });
-    return;
-  }
-
-  await mkdir(cfg.tempDir, { recursive: true });
-  const fileName = sanitizePdfName(getHeader(req, 'x-filename'));
-  const tempPath = path.join(
-    cfg.tempDir,
-    `${Date.now()}-${crypto.randomUUID()}.pdf`
-  );
-
+  // NOTE: từ đây mọi return path PHẢI đi qua finally để release slot
   try {
+    const contentType = (getHeader(req, 'content-type') || '').toLowerCase();
+    if (!contentType.startsWith('application/pdf')) {
+      sendJson(req, res, cfg, 415, { ok: false, error: 'Expected application/pdf' });
+      return;
+    }
+
+    const contentLength = Number(getHeader(req, 'content-length') || 0);
+    const maxBytes = cfg.maxUploadMB * 1024 * 1024;
+    if (contentLength > maxBytes) {
+      sendJson(req, res, cfg, 413, {
+        ok: false,
+        error: `PDF is larger than ${cfg.maxUploadMB} MB`,
+      });
+      return;
+    }
+
+    await mkdir(cfg.tempDir, { recursive: true });
+    const fileName = sanitizePdfName(getHeader(req, 'x-filename'));
+    const tempPath = path.join(
+      cfg.tempDir,
+      `${Date.now()}-${crypto.randomUUID()}.pdf`
+    );
+
     const bytes = await pipeRequestToFile(req, tempPath, maxBytes);
     if (bytes < 100) {
       throw new Error('PDF upload body is empty or too small');
@@ -171,7 +172,7 @@ async function handleUpload(req, res, cfg, config, rateLimiter) {
     console.error(`${ts()} DLib upload failed: ${err.message}`);
     sendJson(req, res, cfg, 500, { ok: false, error: err.message });
   } finally {
-    rateLimiter.onEnd(clientIp);  // luôn giải phóng slot
+    rateLimiter.onEnd(clientIp);  // luôn giải phóng slot — kể cả 415/413/500
     try {
       await rm(tempPath, { force: true });
     } catch {

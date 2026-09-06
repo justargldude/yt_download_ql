@@ -5,7 +5,7 @@
 //   3. ffmpeg cut → req_{id}/HL_xxx.mp4
 //   4. Upload + email
 //   5. Xoá highlights, giữ source 12h
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { mkdir, stat, unlink, readdir, rm, writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -129,9 +129,9 @@ export async function processRequest(request, requestId, config, db, checkCancel
   const ffmpegDir = path.dirname(config.paths.ffmpeg);
   const ytdlpDir = path.dirname(config.paths.ytdlp);
   // Cross-platform aria2c discovery: prefer sitting next to the configured
-  // yt-dlp binary (same dir, e.g. pipx/pip installs), else bare command
-  // name resolved by yt-dlp via PATH. Graceful: if aria2c is missing, the
-  // native downloader is used (existing retry path also covers failures).
+  // yt-dlp binary (same dir), else verify bare 'aria2c' exists on PATH via
+  // --version probe (spawnSync, cheap) — máy không có aria2c → native downloader,
+  // tránh yt-dlp fail rồi mới retry (QA nitpick: unconditional fallback).
   const aria2cName = `aria2c${isWindows() ? '.exe' : ''}`;
   const aria2cCandidates = [
     path.join(ytdlpDir, aria2cName),
@@ -147,9 +147,14 @@ export async function processRequest(request, requestId, config, db, checkCancel
     }
   }
   if (!useAria2c) {
-    // Fall back to bare name — yt-dlp resolves it via PATH at runtime.
-    aria2cPath = aria2cName;
-    useAria2c = true;
+    // Bare name: chỉ adopt khi thật sự nằm trên PATH (probe --version)
+    try {
+      const probe = spawnSync(aria2cName, ['--version'], { stdio: 'ignore', timeout: 5000, env: AUGMENTED_ENV });
+      if (probe.status === 0) {
+        aria2cPath = aria2cName;
+        useAria2c = true;
+      }
+    } catch (e) { /* not installed — native downloader */ }
   }
   const cookiesFile = config.paths.cookiesFile;
   const totalSegments = segments.length;

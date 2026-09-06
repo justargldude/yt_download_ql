@@ -93,7 +93,7 @@ function refreshEmailUI() {
   // Refresh datalist
   const datalist = document.getElementById('saved-emails');
   if (datalist) {
-    datalist.innerHTML = emails.map(e => `<option value="${e}"></option>`).join('');
+    datalist.innerHTML = emails.map(e => `<option value="${escapeAttr(e)}"></option>`).join('');
   }
   // Show/hide manage button
   const manageBtn = document.getElementById('manage-emails-btn');
@@ -675,13 +675,13 @@ function updateStatusItem(requestId, data) {
         </div>`;
     }
     const pct = Math.min(progress.percent || 0, 100);
-    const segInfo = progress.segment_index ? `Đoạn ${progress.segment_index}/${progress.segment_total}` : '';
-    const rangeInfo = progress.segment_range && progress.segment_range !== 'done' ? `${progress.segment_range}` : '';
-    const dlInfo = progress.downloaded ? `${progress.downloaded}` : '';
-    const totalInfo = progress.total_size ? ` / ${progress.total_size}` : '';
-    const speedInfo = progress.speed ? `${progress.speed}` : '';
-    const etaInfo = progress.eta ? `ETA ${progress.eta}` : '';
-    const fileInfo = progress.current_file ? `${progress.current_file}` : '';
+    const segInfo = progress.segment_index ? `Đoạn ${escapeHtml(String(progress.segment_index))}/${escapeHtml(String(progress.segment_total))}` : '';
+    const rangeInfo = progress.segment_range && progress.segment_range !== 'done' ? `${escapeHtml(String(progress.segment_range))}` : '';
+    const dlInfo = progress.downloaded ? `${escapeHtml(String(progress.downloaded))}` : '';
+    const totalInfo = progress.total_size ? ` / ${escapeHtml(String(progress.total_size))}` : '';
+    const speedInfo = progress.speed ? `${escapeHtml(String(progress.speed))}` : '';
+    const etaInfo = progress.eta ? `ETA ${escapeHtml(String(progress.eta))}` : '';
+    const fileInfo = progress.current_file ? `${escapeHtml(String(progress.current_file))}` : '';
     const elapsedHtml = data.processing_started_at
       ? `<span class="elapsed-time" data-start="${escapeAttr(data.processing_started_at)}">${formatElapsed(data.processing_started_at)}</span>`
       : '';
@@ -774,17 +774,19 @@ function updateStatusItem(requestId, data) {
   }
 
   // ── Action Buttons (Retry, Reuse, Cancel) ──
+  // Event delegation: data-action/data-id thay cho inline onclick —
+  // không phụ thuộc escaping trong JS-string context (an toàn hơn).
   let actionsHtml = '<div class="req-actions">';
   if (status === 'error') {
-    actionsHtml += `<button type="button" class="btn-action btn-retry" onclick="retryRequest('${escapeAttr(requestId)}')">🔄 Thử lại ngay</button>`;
-    actionsHtml += `<button type="button" class="btn-action btn-reuse" onclick="reuseInForm('${escapeAttr(requestId)}')">📝 Sửa / Điền lại form</button>`;
+    actionsHtml += `<button type="button" class="btn-action btn-retry" data-action="retry" data-id="${escapeAttr(requestId)}">🔄 Thử lại ngay</button>`;
+    actionsHtml += `<button type="button" class="btn-action btn-reuse" data-action="reuse" data-id="${escapeAttr(requestId)}">📝 Sửa / Điền lại form</button>`;
   } else if (status === 'pending' || status === 'processing') {
-    actionsHtml += `<button type="button" class="btn-action btn-reuse" onclick="reuseInForm('${escapeAttr(requestId)}')">📝 Xem / Sửa lại</button>`;
-    actionsHtml += `<button type="button" class="btn-cancel" onclick="cancelRequest('${escapeAttr(requestId)}')">🚫 Huỷ yêu cầu</button>`;
+    actionsHtml += `<button type="button" class="btn-action btn-reuse" data-action="reuse" data-id="${escapeAttr(requestId)}">📝 Xem / Sửa lại</button>`;
+    actionsHtml += `<button type="button" class="btn-cancel" data-action="cancel" data-id="${escapeAttr(requestId)}">🚫 Huỷ yêu cầu</button>`;
   } else if (status === 'done') {
-    actionsHtml += `<button type="button" class="btn-action btn-reuse" onclick="reuseInForm('${escapeAttr(requestId)}')">📝 Cắt lại / Dùng lại thông tin</button>`;
+    actionsHtml += `<button type="button" class="btn-action btn-reuse" data-action="reuse" data-id="${escapeAttr(requestId)}">📝 Cắt lại / Dùng lại thông tin</button>`;
   } else {
-    actionsHtml += `<button type="button" class="btn-action btn-reuse" onclick="reuseInForm('${escapeAttr(requestId)}')">📝 Dùng lại thông tin</button>`;
+    actionsHtml += `<button type="button" class="btn-action btn-reuse" data-action="reuse" data-id="${escapeAttr(requestId)}">📝 Dùng lại thông tin</button>`;
   }
   actionsHtml += '</div>';
 
@@ -812,6 +814,22 @@ function renderStatusList() {
 }
 
 // ═══════════════════════════════════════════
+//  EVENT DELEGATION cho action buttons
+//  (data-action / data-id thay cho inline onclick — XSS-safe)
+// ═══════════════════════════════════════════
+if (statusList) {
+  statusList.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button[data-action]');
+    if (!btn || !statusList.contains(btn)) return;
+    const { action, id } = btn.dataset;
+    if (!id) return;
+    if (action === 'retry') retryRequest(id);
+    else if (action === 'reuse') reuseInForm(id);
+    else if (action === 'cancel') cancelRequest(id);
+  });
+}
+
+// ═══════════════════════════════════════════
 //  UTILITIES — pure helpers moved to app-utils.js (YTUtils)
 // ═══════════════════════════════════════════
 
@@ -833,19 +851,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (email) {
         syncHistoryByEmail(email);
       } else {
-        // Sync all recent from Firebase
-        db.ref('requests').limitToLast(30).once('value', (snapshot) => {
-          const data = snapshot.val();
-          if (!data) return;
-          let count = 0;
-          Object.keys(data).forEach(id => {
-            saveRequestId(id);
-            listenToRequest(id);
-            count++;
-          });
-          showToast(`Đã tải ${count} yêu cầu gần đây từ Firebase`, 'info');
-          applyFilter();
-        });
+        // Privacy: KHÔNG tải requests của người khác khi không có email.
+        // (trước đây sync 30 request gần nhất của MỌI user — lộ PII)
+        showToast('Nhập email của bạn trước để đồng bộ lịch sử.', 'info');
+        emailInput?.focus();
       }
     });
   }

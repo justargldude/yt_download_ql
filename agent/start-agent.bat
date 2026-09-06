@@ -12,7 +12,9 @@ echo [%DATE% %TIME%] Starting YT-Queue-Agent...
 node agent.js
 set EXIT_CODE=%ERRORLEVEL%
 echo.
-echo [%DATE% %TIME%] Agent stopped (exit code %EXIT_CODE%%). Restarting in 10 seconds...
+echo [%DATE% %TIME%] Agent stopped (exit code %EXIT_CODE%). Restarting in 10 seconds...
 echo Press Ctrl+C to exit completely.
+REM Exit code 0 = graceful drain shutdown (Ctrl+Break/SIGTERM) — không restart
+if %EXIT_CODE% equ 0 exit /b 0
 timeout /t 10 /nobreak >nul
 goto loop

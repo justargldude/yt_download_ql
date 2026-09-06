@@ -48,7 +48,7 @@ export function createRateLimiter({ maxConcurrent = 2, perMinute = 6 } = {}) {
     for (const [ip, times] of timestamps) {
       const kept = times.filter((t) => t > cutoff);
       if (kept.length === 0) timestamps.delete(ip);
-      else timestamps[ip] = kept;
+      else timestamps.set(ip, kept);  // Map.set — KHÔNG dùng timestamps[ip]=
     }
   }
 

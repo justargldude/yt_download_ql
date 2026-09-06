@@ -36,7 +36,15 @@
   }
 
   function isValidYouTubeUrl(url) {
-    return /(?:youtube\.com|youtu\.be)/i.test(url || '');
+    if (!url || typeof url !== 'string') return false;
+    // Strict: chỉ http(s) scheme — chặn javascript:/data: pseudo-URLs
+    try {
+      const u = new URL(url.trim());
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+      return /(?:^|\.)youtube\.com$/i.test(u.hostname) || /(?:^|\.)youtu\.be$/i.test(u.hostname);
+    } catch {
+      return false;
+    }
   }
 
   /** Detect live-stream URL shapes (/live/<id>, ?live=). */
