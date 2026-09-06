@@ -40,7 +40,7 @@ function setCorsHeaders(req, res, cfg) {
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type,X-Filename,X-Doc-Id,X-Api-Key'
+    'Content-Type,X-Filename,X-Doc-Id,X-Api-Key,ngrok-skip-browser-warning'
   );
   res.setHeader('Access-Control-Max-Age', '86400');
   res.setHeader('Access-Control-Allow-Private-Network', 'true');

@@ -179,10 +179,15 @@
   function makeRequestId() {
     const c = globalScope.crypto;
     if (c && typeof c.randomUUID === 'function') return 'req_' + c.randomUUID();
-    // Fallback for exotic environments without crypto.randomUUID
-    return 'req_' + (c ? c.getRandomValues(new Uint32Array(4))
-      .toString(16).padEnd(32, '0').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5')
-      : String(Date.now()) + '-' + Math.random().toString(16).slice(2));
+    // Fallback for environments with crypto.getRandomValues but no randomUUID
+    if (c && typeof c.getRandomValues === 'function') {
+      const bytes = c.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 0x0f) | 0x40; // RFC4122 v4
+      bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC4122 variant
+      const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      return 'req_' + hex.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
+    }
+    return 'req_' + String(Date.now()) + '-' + Math.random().toString(16).slice(2);
   }
 
   const YTUtils = {

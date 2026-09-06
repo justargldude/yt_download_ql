@@ -91,9 +91,10 @@ async function sendSingleEmail(transporter, config, request, attachFiles, driveL
   const fromName = config.email.fromName || 'YT Cut';
 
   // Escape MỌI chuỗi user-controlled NGAY từ đầu (tránh TDZ reference bug)
-  const displayUrl = request.url.length > 70 ? request.url.substring(0, 70) + '...' : request.url;
+  const reqUrl = request.url || '';
+  const displayUrl = reqUrl.length > 70 ? reqUrl.substring(0, 70) + '...' : reqUrl;
   const safeName = escapeHtml(request.name || 'there');
-  const safeUrlAttr = escapeHtml(request.url);
+  const safeUrlAttr = escapeHtml(reqUrl);
   const safeDisplayUrl = escapeHtml(displayUrl);
   const safeSegments = (request.segments || []).map((s) => ({
     start: escapeHtml(s?.start ?? ''),

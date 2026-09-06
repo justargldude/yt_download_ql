@@ -69,6 +69,42 @@ describe('CRIT 1 — emailer.js TDZ ReferenceError (safeSegments use-before-decl
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test('sendSingleEmail KHÔNG throw khi request.url null hoặc undefined', async () => {
+    const emailerUrl = new URL('../agent/emailer.js', import.meta.url).href;
+    const mod = await import(emailerUrl);
+    const tmpDir = fs.mkdtempSync(path.join('/tmp', 'ytcut-email-nullurl-'));
+    const fakeFile = path.join(tmpDir, 'HL_test.mp4');
+    fs.writeFileSync(fakeFile, 'x'.repeat(200));
+
+    try {
+      const request = {
+        name: 'NullUrlUser',
+        email: 'victim@example.com',
+        url: null, // request.url là null
+        segments: [{ start: '00:00:10', end: '00:00:35' }],
+        created_at: new Date().toISOString(),
+      };
+      await assert.doesNotReject(
+        async () => {
+          try {
+            await mod.sendResultEmail(
+              { email: { user: 'x@x.com', appPassword: 'pw' } },
+              request,
+              [fakeFile],
+              null,
+            );
+          } catch (e) {
+            if (e instanceof TypeError && e.message.includes('length')) throw e;
+          }
+        },
+        TypeError,
+        'KHÔNG được crash TypeError khi request.url là null'
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('CRIT 3 — http-guards.js Map property bug (timestamps[ip]= thay vì .set)', () => {
@@ -113,6 +149,11 @@ describe('CRIT 4 — Telegram injection qua /notifications relay', () => {
     assert.ok(!/<b>\$\{name\}<\/b>/.test(src), 'phải dùng safeName (escaped) thay ${name}');
     assert.ok(!/🔗 \$\{url\}/.test(src), 'phải dùng safeUrl (escaped) thay ${url}');
     assert.ok(/safeName = escapeTelegram\(name\)/.test(src), 'safeName phải được escape');
+  });
+  test('setupNotificationsListener dọn queue và chỉ attach listener trong finally (không race condition)', () => {
+    const src = fs.readFileSync(path.join(rootDir, 'agent/telegram.js'), 'utf8');
+    assert.ok(src.includes(".finally(() => {"), 'cleanup promise phải dùng finally để attach listener');
+    assert.ok(src.includes("attachListener();"), 'attachListener phải được gọi trong finally block');
   });
 });
 

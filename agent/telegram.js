@@ -61,11 +61,51 @@ export function setupNotificationsListener(config, db) {
   let forwardedThisMinute = 0;
   let minuteWindowStart = Date.now();
 
-  // Anti-spam: dọn queue TRƯỚC khi attach listener (once → không chạy
-  // đua với child_added như khi dùng setTimeout).
-  (async () => {
-    try {
-      const snap = await ref.once('value');
+  const attachListener = () => {
+    ref.on('child_added', async (snapshot) => {
+      const payload = snapshot.val();
+      try { await snapshot.ref.remove(); } catch (e) { /* ignore */ }
+      if (!payload) return;
+
+      // Rate limit (single-process, đủ cho agent 1 user)
+      const now = Date.now();
+      if (now - minuteWindowStart > 60_000) {
+        minuteWindowStart = now;
+        forwardedThisMinute = 0;
+      }
+      if (forwardedThisMinute >= RATE_LIMIT_PER_MIN) {
+        console.warn(`${ts()} ⚠️ Notification rate limit — dropping payload`);
+        return;
+      }
+      forwardedThisMinute++;
+
+      // Render an toàn: nếu có structured fields → build từ các field đã
+      // escape; nếu chỉ có text → escape toàn bộ text (text là untrusted).
+      let text;
+      if (payload.name || payload.email || payload.url) {
+        const name = escapeTelegram(payload.name || 'Anonymous');
+        const email = payload.email ? escapeTelegram(payload.email) : '';
+        const url = payload.url ? escapeTelegram(payload.url) : '';
+        const lines = ['✂️ <b>Yêu cầu mới!</b>'];
+        if (name) lines.push(`Từ: ${name}${email ? ` (${email})` : ''}`);
+        if (url) lines.push(`URL: ${url}`);
+        if (payload.segments_count != null) lines.push(`Segments: ${payload.segments_count}`);
+        if (payload.request_id) lines.push(`ID: <code>${escapeTelegram(payload.request_id)}</code>`);
+        text = lines.join('\n');
+      } else if (payload.text) {
+        text = escapeTelegram(String(payload.text));
+      } else {
+        return;
+      }
+
+      await sendTelegramMessage(config, text);
+    });
+    console.log(`${ts()} 👂 Notifications listener active on /notifications`);
+  };
+
+  // Anti-spam: dọn queue TRƯỚC khi attach listener để tránh race condition
+  ref.once('value')
+    .then(async (snap) => {
       const all = snap.val() || {};
       const keys = Object.keys(all);
       if (keys.length > MAX_PENDING) {
@@ -75,51 +115,12 @@ export function setupNotificationsListener(config, db) {
         }
         console.warn(`${ts()} ⚠️ Notification queue overflow — dropped ${toDelete.length} stale payloads`);
       }
-    } catch (e) { /* ignore */ }
-  })();
+    })
+    .catch(() => {})
+    .finally(() => {
+      attachListener();
+    });
 
-  ref.on('child_added', async (snapshot) => {
-    const payload = snapshot.val();
-    try { await snapshot.ref.remove(); } catch (e) { /* ignore */ }
-    if (!payload) return;
-
-    // Rate limit (single-process, đủ cho agent 1 user)
-    const now = Date.now();
-    if (now - minuteWindowStart > 60_000) {
-      minuteWindowStart = now;
-      forwardedThisMinute = 0;
-    }
-    if (forwardedThisMinute >= RATE_LIMIT_PER_MIN) {
-      console.warn(`${ts()} ⚠️ Notification rate limit — dropping payload`);
-      return;
-    }
-    forwardedThisMinute++;
-
-    // Render an toàn: nếu có structured fields → build từ các field đã
-    // escape; nếu chỉ có text → escape toàn bộ text (text là untrusted).
-    let text;
-    if (payload.name || payload.email || payload.url) {
-      const name = escapeTelegram(payload.name || 'Anonymous');
-      const email = payload.email ? escapeTelegram(payload.email) : '';
-      const url = payload.url ? escapeTelegram(payload.url) : '';
-      const lines = ['✂️ <b>Yêu cầu mới!</b>'];
-      if (name) lines.push(`Từ: ${name}${email ? ` (${email})` : ''}`);
-      if (url) lines.push(`URL: ${url}`);
-      if (payload.segments_count != null) lines.push(`Segments: ${payload.segments_count}`);
-      if (payload.request_id) lines.push(`ID: <code>${escapeTelegram(payload.request_id)}</code>`);
-      text = lines.join('\n');
-    } else if (payload.text) {
-      text = escapeTelegram(String(payload.text));
-    } else {
-      return;
-    }
-
-    await sendTelegramMessage(config, text);
-  });
-
-  // (Anti-spam cleanup chạy TRƯỚC khi attach listener — xem trên.)
-
-  console.log(`${ts()} 👂 Notifications listener active on /notifications`);
   return ref;
 }
 

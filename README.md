@@ -43,7 +43,10 @@ Extension upload PDF từ thư viện PTIT DLib về máy bạn, agent đẩy l�
     "requests": {
       "$request_id": {
         ".read": "true",
-        ".write": "!data.exists()"
+        ".write": "!data.exists()",
+        "status": {
+          ".write": "newData.val() === 'cancelling'"
+        }
       }
     },
     "notifications": {
@@ -53,13 +56,18 @@ Extension upload PDF từ thư viện PTIT DLib về máy bạn, agent đẩy l�
       }
     },
     "sources": {
-      ".read": "false"
+      ".read": "true",
+      ".write": "false"
+    },
+    "agent_status": {
+      ".read": "true",
+      ".write": "false"
     }
   }
 }
 ```
 *(Local Agent chạy bằng Service Account có quyền Admin nên vẫn đọc/ghi bình thường.
-Rule `notifications` cho phép client push thông báo mới nhưng không đọc/xóa queue của người khác.)*
+Rule `requests` cho phép client gửi yêu cầu mới và gửi lệnh hủy `cancelling`; `notifications` cho phép client gửi thông báo mới; `sources` và `agent_status` cho phép client đọc trạng thái real-time.)*
 
 ### Lấy Web API Key:
 1. Vào **Project Settings** (bánh răng ⚙️ góc trái)

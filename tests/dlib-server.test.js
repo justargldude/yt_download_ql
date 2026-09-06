@@ -73,3 +73,12 @@ test("agent/dlib-upload-server.js imports http-guards and removes local isAllowe
     "agent/dlib-upload-server.js must not define a local function isAllowedOrigin"
   );
 });
+
+test("agent/dlib-upload-server.js includes ngrok-skip-browser-warning in CORS allowed headers", () => {
+  const serverJs = fs.readFileSync(path.join(rootDir, "agent/dlib-upload-server.js"), "utf8");
+  assert.ok(
+    /Access-Control-Allow-Headers[\s\S]*ngrok-skip-browser-warning/.test(serverJs),
+    "Access-Control-Allow-Headers must include ngrok-skip-browser-warning for Chrome extension support"
+  );
+});
+

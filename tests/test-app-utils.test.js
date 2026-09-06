@@ -72,6 +72,33 @@ test("TASK 1: makeRequestId generates unique req_ prefixed UUIDs", () => {
   assert.equal(ids.size, 1000, "All 1000 generated request IDs must be unique");
 });
 
+test("TASK 1: makeRequestId fallback produces valid UUIDv4 when randomUUID is unavailable", () => {
+  const src = fs.readFileSync(path.join(rootDir, "web/app-utils.js"), "utf8");
+  // Mock crypto having getRandomValues but NO randomUUID
+  const mockGlobal = {
+    crypto: {
+      getRandomValues: (arr) => globalThis.crypto.getRandomValues(arr),
+    },
+  };
+  const fn = new Function("globalThis", "window", src + "; return globalThis.YTUtils;");
+  const utils = fn(mockGlobal, mockGlobal);
+  const uuidRegex = /^req_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  for (let i = 0; i < 50; i++) {
+    const id = utils.makeRequestId();
+    assert.ok(uuidRegex.test(id), `Fallback ID ${id} must match valid UUIDv4 pattern`);
+    assert.ok(!id.includes(","), `Fallback ID ${id} must not contain comma from array toString`);
+  }
+});
+
+test("TASK 1: makeRequestId fallback produces req_ prefixed ID when crypto is unavailable", () => {
+  const src = fs.readFileSync(path.join(rootDir, "web/app-utils.js"), "utf8");
+  const mockGlobal = {};
+  const fn = new Function("globalThis", "window", src + "; return globalThis.YTUtils;");
+  const utils = fn(mockGlobal, mockGlobal);
+  const id = utils.makeRequestId();
+  assert.ok(id.startsWith("req_"), `Must start with req_: ${id}`);
+});
+
 test("TASK 1: validation and formatting helpers work properly", () => {
   const YTUtils = loadYTUtils();
   assert.equal(YTUtils.isValidYouTubeUrl("https://youtu.be/dQw4w9WgXcQ"), true);
