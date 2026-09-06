@@ -1,12 +1,13 @@
 // install-service.js — Cài đặt agent thành systemd user service + tạo start.sh
 import { exec } from 'child_process';
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir, chmod } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const agentPath = path.join(__dirname, 'agent.js');
-const shPath = path.join(__dirname, 'start.sh');
+// start-agent.sh đã được track trong repo (chạy thủ công không cần generate)
+const shPath = path.join(__dirname, 'start-agent.sh');
 
 async function main() {
   console.log('📦 Installing YT-Queue-Agent...\n');
@@ -23,24 +24,14 @@ async function main() {
     return;
   }
 
-  // 1. Tạo start.sh để chạy thủ công
-  const shContent = `#!/usr/bin/env bash
-# start.sh — Chạy agent với auto-restart khi crash
-cd "$(dirname "$0")"
-
-while true; do
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting YT-Queue-Agent..."
-  node agent.js
-  EXIT_CODE=$?
-  echo ""
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Agent stopped (exit code $EXIT_CODE). Restarting in 10 seconds..."
-  echo "Press Ctrl+C to exit completely."
-  sleep 10
-done
-`;
-
-  await writeFile(shPath, shContent, { encoding: 'utf-8', mode: 0o755 });
-  console.log(`✅ Created start.sh at: ${shPath}`);
+  // 1. start-agent.sh đã track trong repo — chmod +x nếu cần (không generate nữa,
+  //    tránh trùng lặp/divergence giữa bản generate và bản track)
+  try {
+    await chmod(shPath, 0o755);
+    console.log(`✅ start-agent.sh is executable at: ${shPath}`);
+  } catch (e) {
+    console.warn(`⚠️ Could not chmod start-agent.sh: ${e.message}`);
+  }
 
   // 2. Tạo systemd user service — tự chạy khi đăng nhập
   const serviceName = 'yt-queue-agent';

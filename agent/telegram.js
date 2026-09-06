@@ -61,6 +61,23 @@ export function setupNotificationsListener(config, db) {
   let forwardedThisMinute = 0;
   let minuteWindowStart = Date.now();
 
+  // Anti-spam: dọn queue TRƯỚC khi attach listener (once → không chạy
+  // đua với child_added như khi dùng setTimeout).
+  (async () => {
+    try {
+      const snap = await ref.once('value');
+      const all = snap.val() || {};
+      const keys = Object.keys(all);
+      if (keys.length > MAX_PENDING) {
+        const toDelete = keys.slice(0, keys.length - MAX_PENDING);
+        for (const k of toDelete) {
+          try { await ref.child(k).remove(); } catch (e) { /* ignore */ }
+        }
+        console.warn(`${ts()} ⚠️ Notification queue overflow — dropped ${toDelete.length} stale payloads`);
+      }
+    } catch (e) { /* ignore */ }
+  })();
+
   ref.on('child_added', async (snapshot) => {
     const payload = snapshot.val();
     try { await snapshot.ref.remove(); } catch (e) { /* ignore */ }
@@ -100,22 +117,7 @@ export function setupNotificationsListener(config, db) {
     await sendTelegramMessage(config, text);
   });
 
-  // Anti-spam: nếu queue dồn > MAX_PENDING (bot chết/agent offline lâu),
-  // dọn một nửa cũ nhất khi khởi động lại để không spam Telegram ồ ạt.
-  setTimeout(async () => {
-    try {
-      const snap = await ref.once('value');
-      const all = snap.val() || {};
-      const keys = Object.keys(all);
-      if (keys.length > MAX_PENDING) {
-        const toDelete = keys.slice(0, keys.length - MAX_PENDING);
-        for (const k of toDelete) {
-          try { await ref.child(k).remove(); } catch (e) { /* ignore */ }
-        }
-        console.warn(`${ts()} ⚠️ Notification queue overflow — dropped ${toDelete.length} stale payloads`);
-      }
-    } catch (e) { /* ignore */ }
-  }, 5000).unref();
+  // (Anti-spam cleanup chạy TRƯỚC khi attach listener — xem trên.)
 
   console.log(`${ts()} 👂 Notifications listener active on /notifications`);
   return ref;

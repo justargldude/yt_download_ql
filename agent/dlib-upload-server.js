@@ -125,6 +125,7 @@ async function handleUpload(req, res, cfg, config, rateLimiter) {
   }
 
   // NOTE: từ đây mọi return path PHẢI đi qua finally để release slot
+  let tempPath = null;  // khai báo ngoài try để finally luôn truy cập được
   try {
     const contentType = (getHeader(req, 'content-type') || '').toLowerCase();
     if (!contentType.startsWith('application/pdf')) {
@@ -144,7 +145,7 @@ async function handleUpload(req, res, cfg, config, rateLimiter) {
 
     await mkdir(cfg.tempDir, { recursive: true });
     const fileName = sanitizePdfName(getHeader(req, 'x-filename'));
-    const tempPath = path.join(
+    tempPath = path.join(
       cfg.tempDir,
       `${Date.now()}-${crypto.randomUUID()}.pdf`
     );
@@ -173,10 +174,12 @@ async function handleUpload(req, res, cfg, config, rateLimiter) {
     sendJson(req, res, cfg, 500, { ok: false, error: err.message });
   } finally {
     rateLimiter.onEnd(clientIp);  // luôn giải phóng slot — kể cả 415/413/500
-    try {
-      await rm(tempPath, { force: true });
-    } catch {
-      // ignore temp cleanup failures
+    if (tempPath) {
+      try {
+        await rm(tempPath, { force: true });
+      } catch {
+        // ignore temp cleanup failures
+      }
     }
   }
 }
