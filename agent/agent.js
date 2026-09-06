@@ -17,6 +17,7 @@ import { runStartupChecks } from './auth-checker.js';
 import { startDlibUploadServer } from './dlib-upload-server.js';
 import { ts } from './lib/logger.js';
 import { normalizeUrlForDedup } from './lib/url-hash.js';
+import { createDedupCoordinator } from './lib/dedup.js';
 
 // Backwards-compat re-export: các module cũ import { ts } từ agent.js
 export { ts };
@@ -36,7 +37,8 @@ let currentRequestId = null;
 let dlibUploadServer = null;
 let isPolling = false;                    // mutex: ngăn nhiều poll chạy đồng thời
 const processingSet = new Set();          // track requestId đang xử lý → skip duplicate
-const processingUrls = new Map();         // track URL đang xử lý → skip duplicate URL
+const processingUrls = new Map();         // track URL đang xử lý → defer duplicate URL
+const dedup = createDedupCoordinator({ processingUrls });  // defer/chain same-video requests
 let shutdownResolve = null;               // resolve khi drain xong
 const MAX_RETRY_COUNT = 3;                // số lần retry tối đa trước khi đánh dấu error
 
@@ -273,6 +275,10 @@ async function pollForRequests() {
       await handleSingleRequest(requestId, request);
     }
 
+    // Xử lý các request bị defer vì trùng URL (request trước đã xong →
+    // giờ source cache sẵn, xử lý rẻ). Retry từng URL đã hết bận.
+    await drainDeferredRequests();
+
     // Sau khi xử lý xong tất cả entries trong drain mode → drain xong
     if (isShuttingDown && processingCount === 0 && shutdownResolve) {
       shutdownResolve();
@@ -285,6 +291,38 @@ async function pollForRequests() {
   }
 }
 
+// ── DRAIN DEFERRED (trùng URL) REQUESTS ─────────────────────────────────
+// Sau mỗi poll: các request đã defer vì trùng video sẽ được xử lý khi
+// URL không còn bận. Read lại request từ DB để bắt status mới nhất (user
+// có thể đã cancel trong lúc chờ).
+async function drainDeferredRequests() {
+  // Quét mọi URL có hàng chờ defer; URL còn bận sẽ chờ poll sau.
+  for (const normalizedUrl of dedup.listDeferredUrls()) {
+    if (isForceShutdown) return;
+    if (dedup.isProcessing(normalizedUrl)) continue;  // vẫn bận
+
+    let requestId;
+    while ((requestId = dedup.takeDeferred(normalizedUrl)) !== null) {
+      if (isForceShutdown) return;
+      if (processingSet.has(requestId)) continue;
+
+      // Đọc lại request mới nhất từ DB (bắt cancel trong lúc chờ)
+      let request = null;
+      try {
+        const snap = await db.ref(`requests/${requestId}`).once('value');
+        request = snap.val();
+      } catch (e) { /* skip */ }
+      if (!request || request.status !== 'pending') continue;  // cancelled/done rồi
+
+      console.log(`${ts()} 🔁 Processing deferred request: ${requestId}`);
+      await handleSingleRequest(requestId, request);
+
+      // Nếu request này đã chiếm URL → các deferred còn lại chờ poll sau
+      if (dedup.isProcessing(normalizedUrl)) break;
+    }
+  }
+}
+
 // ── HANDLE ONE REQUEST ──────────────────────────────────────────────────
 async function handleSingleRequest(requestId, request) {
   // Guard: skip nếu request đã đang xử lý
@@ -292,16 +330,19 @@ async function handleSingleRequest(requestId, request) {
 
   // Guard: skip nếu URL này đã đang được xử lý bởi request khác
   const normalizedUrl = normalizeUrlForDedup(request.url);
-  if (normalizedUrl && processingUrls.has(normalizedUrl)) {
-    const existingReqId = processingUrls.get(normalizedUrl);
-    console.log(`${ts()} ⚠️ Duplicate URL detected! ${requestId} has same URL as ${existingReqId} (đang xử lý) → skip & mark duplicate`);
+  if (normalizedUrl && dedup.isProcessing(normalizedUrl)) {
+    // URL đang được xử lý bởi request khác → DEFER (không fail!).
+    // Processor's downloadLocks + source cache sẽ xử lý request này
+    // rẻ hơn nhiều khi request hiện tại xong (reuse cache, không tải lại).
+    console.log(`${ts()} ⏳ Duplicate URL: ${requestId} cùng video với request đang xử lý → defer, sẽ xử lý ở poll sau`);
+    dedup.defer(requestId, normalizedUrl);
     try {
-      await db.ref(`requests/${requestId}`).update({
-        status: 'error',
-        error_message: `Link này đang được tải bởi request ${existingReqId}. Vui lòng chờ hoặc dùng link khác.`,
-        failed_at: new Date().toISOString(),
+      await db.ref(`requests/${requestId}/progress`).set({
+        step: 'downloading', step_num: 1, total_steps: 3, percent: 0,
+        segment_range: '⏳ Cùng video đang được tải — request này sẽ tự chạy tiếp',
+        updated_at: new Date().toISOString(),
       });
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
     return;
   }
 
@@ -417,6 +458,7 @@ async function handleSingleRequest(requestId, request) {
     processingCount--;
     currentRequestId = null;
     processingSet.delete(requestId);
+    dedup.remove(requestId);  // purge khỏi deferred queues nếu user đã cancel
     if (normalizedUrl) processingUrls.delete(normalizedUrl);
   }
 }

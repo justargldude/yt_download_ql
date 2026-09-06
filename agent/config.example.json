@@ -23,9 +23,10 @@
     "port": 8765,
     "apiKey": "",
     "maxUploadMB": 500,
+    "maxConcurrentUploads": 2,
+    "uploadsPerMinute": 6,
     "allowedOrigins": [
-      "https://dlib.ptit.edu.vn",
-      "chrome-extension://"
+      "https://dlib.ptit.edu.vn"
     ]
   },
   "paths": {

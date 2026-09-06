@@ -14,6 +14,7 @@ import { ts } from './lib/logger.js';
 import { hashUrl } from './lib/url-hash.js';
 import { augmentPathEnv, extraRuntimeDirs, isWindows } from './lib/paths.js';
 import { killProcessTree as libKillProcessTree, spawnOpts } from './lib/proc.js';
+import { buildDownloadArgs } from './lib/ytdlp-args.js';
 import { sendResultEmail } from './emailer.js';
 import { uploadToGoogleDrive } from './uploader.js';
 
@@ -236,37 +237,19 @@ export async function processRequest(request, requestId, config, db, checkCancel
       if (useAria2c) console.log(`${ts()} 🚀 aria2c accelerator active`);
       console.log(`${ts()} ════════════════════════════════════════`);
 
-      const dlArgs = [
-        '--force-ipv4',
-        '--js-runtimes', 'deno', '--js-runtimes', 'quickjs',
-        '--concurrent-fragments', String(config.settings?.concurrentFragments || 16),
-        '--retries', '10', '--fragment-retries', '10',
-        '--user-agent', UA,
-        '-f', 'bv*+ba/b', '--merge-output-format', 'mp4',
-        '--ffmpeg-location', ffmpegDir,
-        '-o', sourcePath, '--no-playlist',
-      ];
-      // YouTube auth: dùng cookies file hoặc đọc từ browser
-      if (ytMode === 'browser') {
-        dlArgs.push('--cookies-from-browser', 'chrome');
-      } else if (cookiesFile && existsSync(cookiesFile)) {
-        dlArgs.push('--cookies', cookiesFile);
-      }
-
-      // Live stream: tải từ đầu, chờ nếu chưa bắt đầu, không giới hạn fragment
-      if (isLiveUrl) {
-        dlArgs.push('--live-from-start');
-        dlArgs.push('--wait-for-video', '30-300');  // chờ 30s-5min nếu live chưa bắt đầu
-        dlArgs.push('--no-part');  // không dùng .part file
-        console.log(`${ts()} 🔴 Live stream detected — will download until stream ends`);
-      }
-
-      // aria2c không tương thích với live stream
-      if (useAria2c && !isLiveUrl) {
-        dlArgs.push('--downloader', aria2cPath);
-        dlArgs.push('--downloader-args', 'aria2c:-x 16 -s 16 -j 16 -k 1M --allow-overwrite=true --auto-file-renaming=false --disable-ipv6=true --async-dns-server=8.8.8.8,1.1.1.1');
-      }
-      dlArgs.push(request.url);
+      const dlArgs = buildDownloadArgs({
+        url: request.url,
+        sourcePath,
+        ffmpegDir,
+        useAria2c,
+        aria2cPath,
+        isLiveUrl,
+        ytdlpMode: ytMode,
+        cookiesFile,
+        cookiesFileExists: Boolean(cookiesFile && existsSync(cookiesFile)),
+        concurrentFragments: config.settings?.concurrentFragments || 16,
+      });
+      if (isLiveUrl) console.log(`${ts()} 🔴 Live stream detected — will download until stream ends`);
 
       let dlCancelled = false;
       let lastProgressTime = Date.now();
@@ -330,16 +313,20 @@ export async function processRequest(request, requestId, config, db, checkCancel
           console.log(`${ts()} ⚠️ aria2c failed, retrying native...`);
           // Xóa file partial/incomplete để tránh resume lỗi HTTP 416
           await cleanPartialFiles(sourceDir);
-          const retry = [];
-          for (let j = 0; j < dlArgs.length; j++) {
-            if (dlArgs[j] === '--downloader' || dlArgs[j] === '--downloader-args') {
-              j++; // skip flag + its value
-              continue;
-            }
-            retry.push(dlArgs[j]);
-          }
-          // Thêm --no-continue để force tải lại từ đầu
-          retry.push('--no-continue');
+          // Rebuild args sạch: useAria2c=false + --no-continue (thay vì
+          // index-scan xóa flag --downloader khỏi mảng cũ — fragile)
+          const retry = buildDownloadArgs({
+            url: request.url,
+            sourcePath,
+            ffmpegDir,
+            useAria2c: false,
+            isLiveUrl,
+            ytdlpMode: ytMode,
+            cookiesFile,
+            cookiesFileExists: Boolean(cookiesFile && existsSync(cookiesFile)),
+            concurrentFragments: config.settings?.concurrentFragments || 16,
+            noContinue: true,
+          });
           await assertNotCancelled();
           try { await spawnAsync(config.paths.ytdlp, retry, { prefix: '[retry]', cwd: sourceDir, onLine: onDlLine, onProc: (p) => { currentProc = p; } }); }
           catch (e2) { if (dlCancelled || await checkCancelled()) { clearInterval(cancelCheck); lockReject(e2); throw new Error('CANCELLED'); } lockReject(e2); throw e2; }

@@ -7,6 +7,7 @@ import crypto from 'crypto';
 
 import { uploadToGoogleDrive } from './uploader.js';
 import { ts } from './lib/logger.js';
+import { isAllowedOrigin, createRateLimiter } from './lib/http-guards.js';
 
 function getServerConfig(config) {
   const raw = config.dlib_upload || {};
@@ -16,25 +17,19 @@ function getServerConfig(config) {
     port: Number(raw.port || 8765),
     apiKey: raw.apiKey || '',
     maxUploadMB: Number(raw.maxUploadMB || 500),
+    maxConcurrentUploads: Number(raw.maxConcurrentUploads || 2),
+    uploadsPerMinute: Number(raw.uploadsPerMinute || 6),
     tempDir: raw.tempDir
       ? path.resolve(raw.tempDir)
       : path.join(config.paths.outputDir, 'dlib-uploads'),
     allowedOrigins: raw.allowedOrigins || [
       'https://dlib.ptit.edu.vn',
-      'chrome-extension://',
     ],
   };
 }
 
-function isAllowedOrigin(origin, allowedOrigins) {
-  if (!origin) return true;
-  return allowedOrigins.some((allowed) => {
-    if (allowed === '*') return true;
-    if (allowed.endsWith('*')) return origin.startsWith(allowed.slice(0, -1));
-    if (allowed.endsWith('://')) return origin.startsWith(allowed);
-    return origin === allowed;
-  });
-}
+// isAllowedOrigin moved to ./lib/http-guards.js (extension ids must be
+// exact-allowlisted; prefix wildcard 'chrome-extension://' rejected).
 
 function setCorsHeaders(req, res, cfg) {
   const origin = req.headers.origin;
@@ -116,9 +111,16 @@ async function pipeRequestToFile(req, filePath, maxBytes) {
   });
 }
 
-async function handleUpload(req, res, cfg, config) {
+async function handleUpload(req, res, cfg, config, rateLimiter) {
   if (cfg.apiKey && getHeader(req, 'x-api-key') !== cfg.apiKey) {
     sendJson(req, res, cfg, 401, { ok: false, error: 'Invalid upload API key' });
+    return;
+  }
+
+  // Rate limit: max N concurrent + M uploads/minute per remote IP
+  const clientIp = req.socket?.remoteAddress || 'unknown';
+  if (!rateLimiter.onBegin(clientIp)) {
+    sendJson(req, res, cfg, 429, { ok: false, error: 'Too many uploads, try again shortly' });
     return;
   }
 
@@ -169,6 +171,7 @@ async function handleUpload(req, res, cfg, config) {
     console.error(`${ts()} DLib upload failed: ${err.message}`);
     sendJson(req, res, cfg, 500, { ok: false, error: err.message });
   } finally {
+    rateLimiter.onEnd(clientIp);  // luôn giải phóng slot
     try {
       await rm(tempPath, { force: true });
     } catch {
@@ -183,6 +186,11 @@ export async function startDlibUploadServer(config) {
     console.log(`${ts()} DLib upload server disabled`);
     return null;
   }
+
+  const rateLimiter = createRateLimiter({
+    maxConcurrent: cfg.maxConcurrentUploads,
+    perMinute: cfg.uploadsPerMinute,
+  });
 
   const server = http.createServer(async (req, res) => {
     const origin = req.headers.origin;
@@ -211,7 +219,7 @@ export async function startDlibUploadServer(config) {
     }
 
     if (req.method === 'POST' && url.pathname === '/dlib/upload') {
-      await handleUpload(req, res, cfg, config);
+      await handleUpload(req, res, cfg, config, rateLimiter);
       return;
     }
 
