@@ -1,4 +1,4 @@
-// install-service.js — Cài đặt agent thành systemd user service + tạo start.sh
+// install-service.js — Cài đặt agent thành systemd user service (Linux) / hướng dẫn Windows
 import { exec } from 'child_process';
 import { writeFile, mkdir, chmod } from 'fs/promises';
 import path from 'path';
@@ -87,7 +87,7 @@ WantedBy=default.target
   if (enableOk && startOk) {
     console.log(`\n✅ Service "${serviceName}" registered and started!`);
     console.log(`   The agent will auto-start on login.`);
-    console.log(`   To start manually: ./start.sh`);
+    console.log(`   To start manually: ./start-agent.sh`);
     console.log(`\n📋 Useful commands:`);
     console.log(`   systemctl --user status ${serviceName}    # Xem trạng thái`);
     console.log(`   systemctl --user restart ${serviceName}   # Restart agent`);
@@ -96,7 +96,7 @@ WantedBy=default.target
     console.log(`   systemctl --user disable ${serviceName}   # Tắt auto-start`);
   } else {
     console.warn(`\n⚠️  Service registration might have issues.`);
-    console.log(`   You can still run manually: ./start.sh`);
+    console.log(`   You can still run manually: ./start-agent.sh`);
     console.log(`   Or try: systemctl --user status ${serviceName}`);
   }
 }
