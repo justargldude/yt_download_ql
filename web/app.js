@@ -409,6 +409,7 @@ function initSourceSelector() {
 function initAgentStatus() {
   const dotEl = document.getElementById('agent-dot');
   const textEl = document.getElementById('agent-status-text');
+  const badgeEl = document.getElementById('agent-status');
 
   function updateStatus(data) {
     if (!data || !data.last_heartbeat) {
@@ -423,12 +424,26 @@ function initAgentStatus() {
     } else {
       dotEl.className = 'agent-dot online';
       textEl.textContent = data.processing ? 'Đang xử lý...' : 'Online';
+      if (badgeEl && data.version) {
+        badgeEl.title = `Agent v${data.version} | Heartbeat: ${new Date(data.last_heartbeat).toLocaleTimeString()}`;
+      }
     }
   }
 
-  db.ref('agent_status').on('value', (snap) => updateStatus(snap.val()));
+  db.ref('agent_status').on(
+    'value',
+    (snap) => updateStatus(snap.val()),
+    (err) => {
+      console.warn('[AgentStatus] Failed to read agent_status:', err.message);
+      if (textEl && textEl.textContent === 'Đang kiểm tra...') {
+        dotEl.className = 'agent-dot offline';
+        textEl.textContent = 'Offline';
+      }
+    }
+  );
+
   setInterval(() => {
-    db.ref('agent_status').once('value', (snap) => updateStatus(snap.val()));
+    db.ref('agent_status').once('value', (snap) => updateStatus(snap.val())).catch(() => {});
   }, 20000);
 }
 

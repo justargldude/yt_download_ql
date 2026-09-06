@@ -123,10 +123,10 @@
 
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
-  <!-- Deploy-time config (git-ignored; see config.example.js) — must load FIRST -->
-  <script src="config.js"></script>
+  <!-- Deploy-time config (git-ignored; see config.example.js) — optional local override -->
+  <script src="config.js" onerror="this.remove()"></script>
   <!-- Pure helpers (window.YTUtils) — must load BEFORE app.js -->
-  <script src="app-utils.js"></script>
-  <script src="app.js"></script>
+  <script src="app-utils.js?v=4.0.2"></script>
+  <script src="app.js?v=4.0.2"></script>
 </body>
 </html>
