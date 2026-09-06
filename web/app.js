@@ -6,13 +6,18 @@
    ═══════════════════════════════════════════ */
 
 // ── Configuration ──────────────────────────
-// window.YT_WEB_CONFIG is provided by config.js (deploy-time values,
-// NOT committed — see config.example.js). Fall back to the example
-// template so the page fails loudly instead of silently using secrets.
-const CONFIG = { firebase: window.YT_WEB_CONFIG?.firebase || {} };
-if (!CONFIG.firebase.databaseURL) {
-  console.error('[YT CUT] Missing Firebase config: copy config.example.js → config.js and fill in your values.');
-}
+// window.YT_WEB_CONFIG is provided by config.js (deploy-time override).
+// Falls back to public Firebase project config so Vercel deployment works seamlessly.
+const DEFAULT_FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyCMgmRAFeMjnBeg0wrHOLo1yuMb657mv08',
+  authDomain: 'yt-highlight-queue.firebaseapp.com',
+  databaseURL: 'https://yt-highlight-queue-default-rtdb.asia-southeast1.firebasedatabase.app',
+  projectId: 'yt-highlight-queue',
+  storageBucket: 'yt-highlight-queue.firebasestorage.app',
+  messagingSenderId: '270809931102',
+  appId: '1:270809931102:web:4d2ccbd54c967e83e143cf',
+};
+const CONFIG = { firebase: window.YT_WEB_CONFIG?.firebase || DEFAULT_FIREBASE_CONFIG };
 const {
   extractYouTubeVideoId, isLiveUrl, normalizeTime, parseSegments,
   isValidYouTubeUrl, isValidEmail, escapeHtml, escapeAttr,
